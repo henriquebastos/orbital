@@ -2,6 +2,8 @@
 
 The workspace publishes two packages at the same version: `@henriquebastosnet/orbital` and `@henriquebastosnet/pi-orbital`.
 The root workspace and Pod package are private. The source repository is `https://github.com/henriquebastos/orbital`.
+Publishing a stable GitHub Release starts the **Publish to npm** workflow for its tag.
+Draft releases, prereleases, and tag pushes alone do not publish packages.
 
 ## 1a Prepare a version
 
@@ -10,7 +12,7 @@ Set Pi Orbital's `@henriquebastosnet/orbital` dependency to that exact version.
 Run `npm install --package-lock-only` to update the workspace lockfile.
 Pod's separate runtime lockfile changes only when guest dependencies change.
 
-Install Node 22.19.0 or later and `expect` on a POSIX host.
+Install Node 22.19.0 or later, `expect`, and `ripgrep` on a POSIX host.
 Set `E2B_API_KEY`, then build a current test image:
 
 ```sh
@@ -37,6 +39,8 @@ Use ordinary pushes. Resolve history conflicts before continuing.
 
 ## 1b First publication
 
+Each package must exist on npm before you can configure its trusted publisher.
+Bootstrap the first version once with local npm authentication. Later releases use GitHub OIDC.
 Confirm GitHub access and npm ownership for both scoped package names.
 An anonymous 404 response does not prove that a name is available.
 Sign in with `npm login`, confirm `npm whoami`, and publish from the tagged checkout.
@@ -60,12 +64,15 @@ Leave the optional environment name empty unless the workflow uses a matching en
 Allow direct `npm publish` for that trusted publisher.
 
 Add the `E2B_API_KEY` Actions secret and set the `ORBITAL_IMAGE` repository variable to a current compatible image.
-Run **Publish to npm** with the existing version tag as its `tag` input.
-The workflow must be present on the default branch.
+Create a GitHub Release for the checked version tag, then publish the release.
+The tag must include `.github/workflows/publish.yml` and match all workspace package versions.
 
 The workflow checks coordinated versions, tests installed image preparation, runs acceptance, and saves verification evidence.
-It publishes Orbital, then Pi Orbital. Push events do not publish packages.
-If publication stops after Orbital succeeds, inspect npm before retrying. npm does not permit republishing an existing version.
+It publishes Orbital, then Pi Orbital.
+If publication stops after Orbital succeeds, rerun the failed workflow after fixing the cause.
+The workflow skips an existing version only when npm records the same Git commit.
+An existing version from another or unknown commit stops publication.
 
 The workflow uses Node 22.19.0, npm 11.5.1, and OIDC without an npm token.
 See [npm trusted publishers](https://docs.npmjs.com/trusted-publishers/) for account setup.
+The [npm trust prerequisites](https://docs.npmjs.com/cli/v11/commands/npm-trust/#prerequisites) explain the first-publication requirement.

@@ -1,12 +1,8 @@
 name: Publish to npm
 
 on:
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Existing version tag, for example v0.1.1'
-        required: true
-        type: string
+  release:
+    types: [published]
 
 permissions: {}
 
@@ -16,6 +12,7 @@ concurrency:
 
 jobs:
   publish:
+    if: github.event.release.prerelease == false
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -24,12 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.event.release.tag_name }}
           fetch-depth: 0
       - name: Verify release tag and package
         shell: bash
         env:
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
           [[ "$GITHUB_REPOSITORY" == 'henriquebastos/orbital' ]]
@@ -58,6 +55,13 @@ jobs:
           const pi = JSON.parse(readFileSync('packages/pi-orbital/package.json', 'utf8'));
           assert.equal(pi.dependencies['@henriquebastosnet/orbital'], pkg.version);
           NODE
+      - name: Check hosted-test configuration
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          ORBITAL_IMAGE: ${{ vars.ORBITAL_IMAGE }}
+        run: |
+          test -n "$E2B_API_KEY" || { echo 'Set the E2B_API_KEY repository secret.' >&2; exit 1; }
+          test -n "$ORBITAL_IMAGE" || { echo 'Set the ORBITAL_IMAGE repository variable.' >&2; exit 1; }
       - uses: actions/setup-node@v7
         with:
           node-version: '22.19.0'
@@ -67,8 +71,8 @@ jobs:
         run: |
           npm install --global npm@11.5.1
           test "$(npm --version)" = '11.5.1'
-      - name: Install expect
-        run: sudo apt-get update && sudo apt-get install -y expect
+      - name: Install test tools
+        run: sudo apt-get update && sudo apt-get install -y expect ripgrep
       - run: npm ci
       - name: Verify installed image preparation
         run: npm run test:preparation
@@ -117,5 +121,21 @@ jobs:
           retention-days: 30
       - name: Publish with npm trusted publishing
         run: |
-          npm publish --workspace @henriquebastosnet/orbital --access public
-          npm publish --workspace @henriquebastosnet/pi-orbital --access public
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { execFileSync } from 'node:child_process';
+          import { readFileSync } from 'node:fs';
+          const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          for (const workspace of ['orbital', 'pi-orbital']) {
+            const { name, version } = JSON.parse(readFileSync(`packages/${workspace}/package.json`, 'utf8'));
+            const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}/${version}`);
+            if (response.ok) {
+              const published = await response.json();
+              assert.equal(published.gitHead, commit, `${name}@${version} belongs to another or unknown commit.`);
+              console.log(`${name}@${version} is already published from this commit.`);
+              continue;
+            }
+            assert.equal(response.status, 404, `Cannot check ${name}@${version} on npm.`);
+            execFileSync('npm', ['publish', '--workspace', name, '--access', 'public'], { stdio: 'inherit' });
+          }
+          NODE
