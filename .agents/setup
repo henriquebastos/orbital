@@ -24,8 +24,9 @@ if ((${#packages[@]})); then
   sudo apt-get install -y --no-install-recommends "${packages[@]}"
 fi
 
-if ! command -v op >/dev/null; then
-  echo 'Installing 1Password CLI'
+op_version=2.40.0-beta.02
+if ! command -v op >/dev/null || [[ "$(op --version)" != "$op_version" ]]; then
+  echo 'Installing 1Password CLI beta'
   case "$(uname -m)" in
     x86_64) arch=amd64 ;;
     aarch64) arch=arm64 ;;
@@ -34,12 +35,26 @@ if ! command -v op >/dev/null; then
   temporary="$(mktemp -d)"
   trap 'rm -rf "$temporary"' EXIT
   curl --fail --silent --show-error --location --retry 3 \
-    "https://cache.agilebits.com/dist/1P/op2/pkg/v2.32.0/op_linux_${arch}_v2.32.0.zip" \
+    "https://cache.agilebits.com/dist/1P/op2/pkg/v${op_version}/op_linux_${arch}_v${op_version}.zip" \
     -o "$temporary/op.zip"
   unzip -q "$temporary/op.zip" -d "$temporary"
   sudo install -m 0755 "$temporary/op" /usr/local/bin/op
 fi
 op --version
+op run --help | grep -q -- '--environment '
+
+echo 'Configuring automatic 1Password Environment loading'
+repo_root="$PWD"
+profile_marker="# Orbital 1Password Environment"
+if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+  cat >> "$HOME/.bash_profile" <<EOF
+
+$profile_marker
+case "\$PWD/" in
+  "$repo_root/"*) source "$repo_root/.agents/environment" || exit 1 ;;
+esac
+EOF
+fi
 
 echo 'Installing workspace dependencies'
 time npm ci --no-audit --no-fund

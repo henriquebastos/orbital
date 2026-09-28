@@ -33,13 +33,33 @@ No local setup file is required in CI.
 ## 1d Amp orbs
 
 Amp runs `.agents/setup` when it prepares an orb without a matching project snapshot.
-The script checks the orb's Node version, installs missing test tools and 1Password CLI, then runs `npm ci` and `npm run build`.
+The script checks the orb's Node version and installs missing test tools and the pinned 1Password CLI beta.
+It then runs `npm ci` and `npm run build`.
 It does not authenticate, read secrets, or create hosted resources.
 No resume hook or persistent development service is required.
 
 Run `npm run test:local` and `npm run test:install` to verify the environment.
 Use `npm run pi` to start the workspace's Pi with the built extension.
-Configure hosted variables through Amp project secrets and environment variables when needed.
+Amp project settings hold two values:
+
+- `OP_ENVIRONMENT_ID`: the project's 1Password Environment ID, stored as an environment variable.
+- `OP_SERVICE_ACCOUNT_TOKEN`: a secret for a service account with read access to that Environment.
+
+Store `E2B_API_KEY` and `ORBITAL_IMAGE` in the 1Password Environment.
+The orb's login shell loads its variables automatically when it starts inside this repository.
+Run ordinary commands:
+
+```sh
+npm run test:hosted -- --case basic
+```
+
+Image preparation needs only `E2B_API_KEY`. Save the returned image reference as `ORBITAL_IMAGE` in 1Password before other hosted checks.
+The hook captures Bash-quoted exports in memory. It writes no resolved secrets to disk and leaves Amp's `~/.env` unchanged.
+Each login shell makes a 1Password request. Existing shells retain their values until replaced.
+Commands receive plaintext environment variables without output masking. Never print secrets or enable shell tracing.
+Without an Environment ID, the hook does nothing. With an ID, authentication failures stop the shell before it runs commands.
+After changing Amp settings, use `amp orb restart-processes` to refresh the current orb's environment.
+After changing values in 1Password, start a new login shell. Restart existing services to refresh their inherited environment.
 Hosted checks require separate approval because they create E2B resources.
 
 The setup file must reach the Amp project's base branch before future orbs can use it.

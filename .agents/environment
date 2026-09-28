@@ -1,0 +1,15 @@
+# Sourced by the orb's login shell. Never write resolved secrets to disk.
+if [[ -n "${OP_ENVIRONMENT_ID:-}" ]]; then
+  if [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]]; then
+    echo 'Set OP_SERVICE_ACCOUNT_TOKEN in Amp project secrets.' >&2
+    return 1
+  fi
+  if ! orbital_exports="$(op run --no-masking --environment "$OP_ENVIRONMENT_ID" -- \
+    bash --noprofile --norc -c 'export -p')"; then
+    echo 'Could not load the 1Password Environment.' >&2
+    unset orbital_exports
+    return 1
+  fi
+  eval "$orbital_exports"
+  unset orbital_exports
+fi

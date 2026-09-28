@@ -20,5 +20,13 @@ The project has no persistent development service or resume hook.
 An Amp orb hosts development. Orbital's test Orbs are separate E2B resources.
 
 Local checks require no hosted credentials. Never print secrets or commit personal environment files.
+Amp stores only `OP_ENVIRONMENT_ID` and the secret `OP_SERVICE_ACCOUNT_TOKEN` for this project's environment.
+The orb's login shell loads that Environment automatically through `.agents/environment` using 1Password CLI beta.
+Run ordinary commands, such as `npm run test:hosted -- --case basic`, without a wrapper.
+The service account needs read access to that 1Password Environment.
+Keep `E2B_API_KEY` and `ORBITAL_IMAGE` in 1Password, not Amp settings.
+Never export resolved secrets into setup snapshots, shell profiles, or `.env` files.
+Commands inherit plaintext secrets in memory without output masking. Never print the environment or enable shell tracing.
+Run `bash tests/orb-environment.sh` after changes to the environment hook.
 Hosted checks and `image:build` create remote resources. Get explicit approval before running them.
 See `docs/verification.md` for required variables and cleanup receipts.
