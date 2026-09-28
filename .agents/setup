@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+echo 'Checking Node.js (22.19.0 or later)'
+node --input-type=module -e '
+  const [major, minor] = process.versions.node.split(".").map(Number);
+  if (major < 22 || (major === 22 && minor < 19)) {
+    throw new Error("Orbital requires Node.js 22.19.0 or later.");
+  }
+'
+node --version
+npm --version
+
+packages=()
+command -v expect >/dev/null || packages+=(expect)
+command -v rg >/dev/null || packages+=(ripgrep)
+command -v curl >/dev/null || packages+=(curl)
+command -v unzip >/dev/null || packages+=(unzip)
+if ((${#packages[@]})); then
+  echo 'Installing missing system tools'
+  sudo apt-get update -qq
+  sudo apt-get install -y --no-install-recommends "${packages[@]}"
+fi
+
+if ! command -v op >/dev/null; then
+  echo 'Installing 1Password CLI'
+  case "$(uname -m)" in
+    x86_64) arch=amd64 ;;
+    aarch64) arch=arm64 ;;
+    *) echo 'Unsupported architecture for 1Password CLI' >&2; exit 1 ;;
+  esac
+  temporary="$(mktemp -d)"
+  trap 'rm -rf "$temporary"' EXIT
+  curl --fail --silent --show-error --location --retry 3 \
+    "https://cache.agilebits.com/dist/1P/op2/pkg/v2.32.0/op_linux_${arch}_v2.32.0.zip" \
+    -o "$temporary/op.zip"
+  unzip -q "$temporary/op.zip" -d "$temporary"
+  sudo install -m 0755 "$temporary/op" /usr/local/bin/op
+fi
+op --version
+
+echo 'Installing workspace dependencies'
+time npm ci --no-audit --no-fund
+
+echo 'Building packages'
+time npm run build

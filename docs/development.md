@@ -29,3 +29,18 @@ Configure required variables through the runner's secrets or VM provisioning.
 Provisioning owns any secret-manager authentication and service-account permissions.
 Project commands use the resulting values without reading a personal `.envrc` or invoking a secret manager.
 No local setup file is required in CI.
+
+## 1d Amp orbs
+
+Amp runs `.agents/setup` when it prepares an orb without a matching project snapshot.
+The script checks the orb's Node version, installs missing test tools and 1Password CLI, then runs `npm ci` and `npm run build`.
+It does not authenticate, read secrets, or create hosted resources.
+No resume hook or persistent development service is required.
+
+Run `npm run test:local` and `npm run test:install` to verify the environment.
+Use `npm run pi` to start the workspace's Pi with the built extension.
+Configure hosted variables through Amp project secrets and environment variables when needed.
+Hosted checks require separate approval because they create E2B resources.
+
+The setup file must reach the Amp project's base branch before future orbs can use it.
+Confirm that the Amp project points to `https://github.com/henriquebastos/orbital`, not the earlier Python repository.

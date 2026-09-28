@@ -9,3 +9,4 @@ test-output/
 .env
 .env.*
 /.envrc
+/.amp/portals/
