@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          package-manager-cache: false
+      - name: Install expect
+        run: sudo apt-get update && sudo apt-get install -y expect
+      - run: npm ci
+      - run: npm run test:local
+      - run: npm run test:install
+      - name: Upload test receipts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-test-receipts
+          path: test-output/
+          if-no-files-found: warn
+          retention-days: 14

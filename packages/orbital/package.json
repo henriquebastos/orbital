@@ -1,0 +1,25 @@
+{
+  "name": "@henriquebastosnet/orbital",
+  "version": "0.1.0",
+  "description": "Manage Orbs, workspaces, and prepared images.",
+  "license": "MIT",
+  "author": "Henrique Bastos",
+  "repository": { "type": "git", "url": "git+https://github.com/henriquebastos/orbital.git", "directory": "packages/orbital" },
+  "homepage": "https://github.com/henriquebastos/orbital/tree/main/packages/orbital#readme",
+  "bugs": { "url": "https://github.com/henriquebastos/orbital/issues" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org/" },
+  "type": "module",
+  "bin": { "orbital-image": "./dist/cli/image.js" },
+  "exports": {
+    ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" },
+    "./settings": { "types": "./dist/configuration/index.d.ts", "default": "./dist/configuration/index.js" },
+    "./settings/node": { "types": "./dist/configuration/node.d.ts", "default": "./dist/configuration/node.js" }
+  },
+  "files": ["dist", "guest", "docs"],
+  "engines": { "node": ">=22.19.0" },
+  "scripts": {
+    "build": "node scripts/bundle-pod.mjs && tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "dependencies": { "e2b": "2.51.0" }
+}

@@ -1,0 +1,12 @@
+export { createOrbital } from "./hangar/index.js";
+export { Workspace } from "./workspace.js";
+export { createE2BProvider, type E2BProviderConfig } from "./e2b/provider.js";
+export { createE2BImages } from "./e2b/images.js";
+export { OrbitalError } from "./operations.js";
+export type { AllocationRequest, Provider } from "./provider.js";
+export type { CreationIntent, OrbSnapshot } from "./orb.js";
+export type { CreateRequest } from "./hangar/index.js";
+export type { ImageRequest, Images, PrepareRequest, PreparedImage } from "./hangar/images/types.js";
+export type { ExecRequest, ExecResult, FileStat } from "./workspace.js";
+export type { Observer } from "./operations.js";
+export { decideDemand } from "./orb.js";

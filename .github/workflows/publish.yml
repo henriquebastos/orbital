@@ -1,0 +1,121 @@
+name: Publish to npm
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing version tag, for example v0.1.1'
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: npm-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          fetch-depth: 0
+      - name: Verify release tag and package
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REPOSITORY" == 'henriquebastos/orbital' ]]
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          git show-ref --verify --quiet "refs/tags/$RELEASE_TAG"
+          [[ "$(git rev-parse "refs/tags/${RELEASE_TAG}^{commit}")" == "$(git rev-parse HEAD)" ]]
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const lock = JSON.parse(readFileSync('package-lock.json', 'utf8'));
+          assert.equal(pkg.name, 'orbital-workspace');
+          assert.equal(pkg.private, true);
+          assert.equal(pkg.version, process.env.RELEASE_TAG.slice(1));
+          assert.equal(lock.name, pkg.name);
+          assert.equal(lock.version, pkg.version);
+          assert.equal(lock.packages[''].name, pkg.name);
+          assert.equal(lock.packages[''].version, pkg.version);
+          for (const name of ['orbital', 'pod', 'pi-orbital']) {
+            const path = `packages/${name}`;
+            const workspace = JSON.parse(readFileSync(`${path}/package.json`, 'utf8'));
+            assert.equal(workspace.version, pkg.version);
+            assert.equal(lock.packages[path].version, workspace.version);
+            assert.equal(workspace.private === true, name === 'pod');
+          }
+          const pi = JSON.parse(readFileSync('packages/pi-orbital/package.json', 'utf8'));
+          assert.equal(pi.dependencies['@henriquebastosnet/orbital'], pkg.version);
+          NODE
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22.19.0'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false
+      - name: Install npm with trusted publishing support
+        run: |
+          npm install --global npm@11.5.1
+          test "$(npm --version)" = '11.5.1'
+      - name: Install expect
+        run: sudo apt-get update && sudo apt-get install -y expect
+      - run: npm ci
+      - name: Verify installed image preparation
+        run: npm run test:preparation
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+      - name: Run complete acceptance gate
+        run: npm run test:acceptance
+        env:
+          E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+          ORBITAL_IMAGE: ${{ vars.ORBITAL_IMAGE }}
+      - name: Verify acceptance and cleanup receipts
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { readFileSync, readdirSync } from 'node:fs';
+          const dir = 'test-output';
+          const read = (path) => JSON.parse(readFileSync(path, 'utf8'));
+          const acceptance = readdirSync(dir).filter((name) => name.endsWith('-acceptance'));
+          assert.equal(acceptance.length, 1);
+          const receipt = read(`${dir}/${acceptance[0]}/receipt.json`);
+          assert.equal(receipt.status, 'passed');
+          assert.deepEqual(receipt.skips, []);
+          for (const name of ['linux', 'lifetime', 'hosted']) {
+            const stage = receipt.runs.find((run) => run.name === name);
+            assert.equal(stage?.code, 0, `${name} did not pass`);
+            const stageReceipt = read(stage.receipts.at(-1));
+            assert.equal(stageReceipt.status, 'passed', `${name} receipt did not pass`);
+            if (name === 'linux') assert.equal(stageReceipt.cleanup.verified, true);
+            if (name === 'hosted') assert.equal(stageReceipt.cleanup.missingAfterDelete, true);
+            if (name === 'lifetime') {
+              assert.equal(stageReceipt.attempts.length, 5);
+              for (const attempt of stageReceipt.attempts) {
+                assert.equal(attempt.status, 'passed');
+                assert.equal(attempt.cleanup.missingAfterDelete, true);
+              }
+            }
+          }
+          NODE
+      - name: Upload verification evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-verification
+          path: test-output/
+          if-no-files-found: warn
+          retention-days: 30
+      - name: Publish with npm trusted publishing
+        run: |
+          npm publish --workspace @henriquebastosnet/orbital --access public
+          npm publish --workspace @henriquebastosnet/pi-orbital --access public

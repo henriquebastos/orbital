@@ -1,0 +1,10 @@
+{
+  "name": "orbital-runner-image",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "e2b": "2.51.0",
+    "node": "22.15.0"
+  }
+}

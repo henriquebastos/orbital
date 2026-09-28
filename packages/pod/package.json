@@ -1,0 +1,8 @@
+{
+  "name": "@henriquebastosnet/orbital-pod",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Guest runtime bundled into Orbital images.",
+  "license": "MIT"
+}

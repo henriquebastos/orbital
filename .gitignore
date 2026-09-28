@@ -1,0 +1,11 @@
+.DS_Store
+node_modules/
+dist/
+orbital-*.tgz
+henriquebastosnet-orbital-*.tgz
+henriquebastosnet-pi-orbital-*.tgz
+packages/orbital/guest/
+test-output/
+.env
+.env.*
+/.envrc

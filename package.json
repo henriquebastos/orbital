@@ -1,0 +1,36 @@
+{
+  "name": "orbital-workspace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "scripts": {
+    "build": "npm run build --workspace @henriquebastosnet/orbital && npm run build --workspace @henriquebastosnet/pi-orbital",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test:unit": "node --import tsx --test packages/orbital/tests/contracts/*.test.ts packages/orbital/tests/e2b/*.test.ts packages/pi-orbital/tests/*.test.ts",
+    "test:local": "npm run build && npm run typecheck && npm run test:unit",
+    "test:install": "npm run build && node --import tsx tests/integration/pi-install.ts",
+    "test:simulation": "node --import tsx packages/orbital/tests/contracts/simulation.ts",
+    "test:replay": "node --import tsx packages/orbital/tests/contracts/simulation.ts --replay",
+    "test:sensitivity": "node --import tsx tests/sensitivity/run.ts",
+    "test:acceptance": "node --import tsx tests/acceptance.ts",
+    "test:hosted": "npm run build && node --import tsx tests/integration/pi-flow.ts",
+    "test:linux": "node --import tsx tests/integration/linux-hosted.ts",
+    "test:preparation": "npm run build && node --import tsx tests/integration/preparation-hosted.ts",
+    "test:lifetime": "npm run build && node --import tsx tests/integration/lifetime.ts",
+    "pi": "pi --extension ./packages/pi-orbital/dist/index.js",
+    "image:build": "npm run build --workspace @henriquebastosnet/orbital && node packages/orbital/dist/cli/image.js"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "0.87.0",
+    "@earendil-works/pi-ai": "0.87.0",
+    "@types/node": "^22.0.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}
