@@ -13,3 +13,8 @@ if [[ -n "${OP_ENVIRONMENT_ID:-}" ]]; then
   eval "$orbital_exports"
   unset orbital_exports
 fi
+
+if [[ -z "${ORBITAL_IMAGE:-}" ]]; then
+  IFS= read -r ORBITAL_IMAGE < "${BASH_SOURCE[0]%/*}/test-image" || return 1
+  export ORBITAL_IMAGE
+fi

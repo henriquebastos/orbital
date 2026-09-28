@@ -25,7 +25,8 @@ Sensitivity checks rebuild each mutated workspace before they run its assertion.
 
 The preparation test requires `E2B_API_KEY` and builds its own disposable images.
 Other hosted checks also require `ORBITAL_IMAGE`.
-Prepare an image with `npm run image:build`, then use the returned `reference` as `ORBITAL_IMAGE`.
+Amp orb shells supply `ORBITAL_IMAGE` from the committed `.agents/test-image` reference automatically.
+Outside Amp, set `ORBITAL_IMAGE` to that reference or prepare an image with `npm run image:build` and use its returned `reference`.
 Hosted tests create E2B resources.
 
 | Command | Checks |

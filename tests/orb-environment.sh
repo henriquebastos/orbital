@@ -41,4 +41,15 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
   fi
   [[ "$ORBITAL_ENV_TEST" == unchanged ]]
 )
-echo 'Environment hook: 4 checks passed'
+(
+  unset OP_ENVIRONMENT_ID OP_SERVICE_ACCOUNT_TOKEN ORBITAL_IMAGE
+  source .agents/environment
+  bash --noprofile --norc -c '[[ "$ORBITAL_IMAGE" == orbital-v2-runner-*:????????-????-????-????-???????????? ]]'
+)
+(
+  unset OP_ENVIRONMENT_ID OP_SERVICE_ACCOUNT_TOKEN
+  export ORBITAL_IMAGE=explicit-test-image
+  source .agents/environment
+  [[ "$ORBITAL_IMAGE" == explicit-test-image ]]
+)
+echo 'Environment hook: 6 checks passed'

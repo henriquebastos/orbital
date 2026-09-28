@@ -24,7 +24,10 @@ Amp stores only `OP_ENVIRONMENT_ID` and the secret `OP_SERVICE_ACCOUNT_TOKEN` fo
 The orb's login shell loads that Environment automatically through `.agents/environment` using 1Password CLI beta.
 Run ordinary commands, such as `npm run test:hosted -- --case basic`, without a wrapper.
 The service account needs read access to that 1Password Environment.
-Keep `E2B_API_KEY` and `ORBITAL_IMAGE` in 1Password, not Amp settings.
+Keep `E2B_API_KEY` in 1Password, not Amp settings.
+The hook defaults `ORBITAL_IMAGE` to the non-secret E2B build reference in `.agents/test-image`.
+New orbs reuse that remote image without sharing a local cache. Keep the referenced image in E2B.
+After guest recipe changes, rebuild with `env -u ORBITAL_IMAGE npm run image:build` and update `.agents/test-image`.
 Never export resolved secrets into setup snapshots, shell profiles, or `.env` files.
 Commands inherit plaintext secrets in memory without output masking. Never print the environment or enable shell tracing.
 Run `bash tests/orb-environment.sh` after changes to the environment hook.

@@ -45,7 +45,7 @@ Amp project settings hold two values:
 - `OP_ENVIRONMENT_ID`: the project's 1Password Environment ID, stored as an environment variable.
 - `OP_SERVICE_ACCOUNT_TOKEN`: a secret for a service account with read access to that Environment.
 
-Store `E2B_API_KEY` and `ORBITAL_IMAGE` in the 1Password Environment.
+Store `E2B_API_KEY` in the 1Password Environment.
 The orb's login shell loads its variables automatically when it starts inside this repository.
 Run ordinary commands:
 
@@ -53,11 +53,17 @@ Run ordinary commands:
 npm run test:hosted -- --case basic
 ```
 
-Image preparation needs only `E2B_API_KEY`. Save the returned image reference as `ORBITAL_IMAGE` in 1Password before other hosted checks.
+The hook supplies `ORBITAL_IMAGE` from `.agents/test-image` unless an explicit value is already set.
+This file pins a non-secret E2B image reference to an exact build.
+E2B stores the image independently of Amp orbs. Each fresh checkout selects the same build without a shared local cache.
+The E2B credential must have access to that image. Do not delete the pinned image while checkouts still use it.
+After changes to Pod or the image recipe, run `env -u ORBITAL_IMAGE npm run image:build` with approval.
+Update `.agents/test-image` with the returned `reference` and commit it alongside the guest changes.
+The local image cache detects recipe changes. It is not a registry shared between Amp orbs.
 The hook captures Bash-quoted exports in memory. It writes no resolved secrets to disk and leaves Amp's `~/.env` unchanged.
 Each login shell makes a 1Password request. Existing shells retain their values until replaced.
 Commands receive plaintext environment variables without output masking. Never print secrets or enable shell tracing.
-Without an Environment ID, the hook does nothing. With an ID, authentication failures stop the shell before it runs commands.
+Without an Environment ID, the hook loads only the image reference. With an ID, authentication failures stop the shell before it runs commands.
 After changing Amp settings, use `amp orb restart-processes` to refresh the current orb's environment.
 After changing values in 1Password, start a new login shell. Restart existing services to refresh their inherited environment.
 Hosted checks require separate approval because they create E2B resources.
