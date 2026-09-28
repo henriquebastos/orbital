@@ -12,6 +12,7 @@ import { pathToFileURL } from "node:url";
 import type { Sandbox as SandboxClass, Template as TemplateClass } from "e2b";
 
 import { saveReceipt } from "../support/receipts.js";
+import { createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 import type { createOrbital as createOrbitalType, createE2BImages as createE2BImagesType,
   createE2BProvider as createE2BProviderType } from "@henriquebastosnet/orbital";
 import type { orbitalRecipe as orbitalRecipeType } from "../../packages/orbital/src/hangar/images/recipe.js";
@@ -25,7 +26,7 @@ const orbIds = Object.fromEntries(["base", "one", "two", "refreshed", "failed"]
   .map((name) => [name, `orbital-preparation-${runId}-${name}`])) as Record<"base" | "one" | "two" | "refreshed" | "failed", string>;
 const startedAt = Date.now();
 const events: Array<Record<string, unknown>> = [];
-const apiKey = process.env.E2B_API_KEY;
+let apiKey: string | undefined;
 const packageOnly = process.argv.includes("--package-only");
 const preparation = `if [ -n "\${E2B_API_KEY:-}" ]; then echo 'guest key leaked' >&2; exit 34; fi\nprintf '%s\\n' '${runId}' > /home/user/orbital-prepared.txt\nprintf 'prepared:${runId}\\n'`;
 
@@ -35,6 +36,9 @@ type Installed = {
   createOrbital: typeof createOrbitalType;
   createE2BImages: typeof createE2BImagesType;
   createE2BProvider: typeof createE2BProviderType;
+  createE2BImageEffects: typeof import("@henriquebastosnet/orbital").createE2BImageEffects;
+  createImages: typeof import("@henriquebastosnet/orbital").createImages;
+  ImageRecords: typeof import("@henriquebastosnet/orbital").ImageRecords;
   orbitalRecipe: typeof orbitalRecipeType;
   Sandbox: SandboxApi;
   Template: typeof TemplateClass;
@@ -115,8 +119,7 @@ async function installPackage(): Promise<Installed> {
   const recipe = await orbitalRecipe();
   sourceHash = recipe.sourceHash;
   record("package_installed", { packageDigest, packageEntry, sourceHash, archiveFiles: paths.size });
-  return { createOrbital: entry.createOrbital, createE2BImages: entry.createE2BImages,
-    createE2BProvider: entry.createE2BProvider, orbitalRecipe, Sandbox, Template };
+  return { ...entry, orbitalRecipe, Sandbox, Template };
 }
 
 async function waitForState(orbId: string, expected: "sleeping" | "running"): Promise<void> {
@@ -129,13 +132,18 @@ async function waitForState(orbId: string, expected: "sleeping" | "running"): Pr
 }
 
 async function testPreparation(): Promise<void> {
-  assert.ok(apiKey, "E2B_API_KEY is required for the hosted preparation test.");
+  ({ apiKey } = createOrbitalConfiguration().e2b());
   const installed = await installPackage();
   sdk = installed.Sandbox;
   templateSdk = installed.Template;
+  const effects = installed.createE2BImageEffects({ apiKey, cacheDirectory });
+  const recipe = await effects.recipe();
+  // Give disposable test images a private identity so cleanup cannot delete a shared base.
+  effects.recipe = async () => ({ ...recipe,
+    sourceHash: createHash("sha256").update(recipe.sourceHash).update(runId).digest("hex") });
   orbital = installed.createOrbital({
     provider: installed.createE2BProvider({ apiKey }),
-    images: installed.createE2BImages({ apiKey, cacheDirectory }),
+    images: installed.createImages(effects, new installed.ImageRecords(cacheDirectory, effects.scope)),
   });
   const progress: string[] = [];
   const observer = { onProgress: (event: { phase: string }) => {

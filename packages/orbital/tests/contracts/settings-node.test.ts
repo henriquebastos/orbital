@@ -4,7 +4,36 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { orbitalSettingsSchema } from "../../src/configuration/index.js";
-import { createNodeSettings } from "../../src/configuration/node.js";
+import { createNodeSettings, createOrbitalConfiguration } from "../../src/configuration/node.js";
+
+test("Orbital configuration resolves credentials without saving or exposing them in settings", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-configuration-"));
+  const environment: Record<string, string | undefined> = { E2B_API_KEY: "test-secret", ORBITAL_IMAGE: "environment-image" };
+  try {
+    const configuration = createOrbitalConfiguration({ directory, environment });
+    assert.deepEqual(configuration.e2b(), { apiKey: "test-secret" });
+    assert.equal(await configuration.image(), "environment-image");
+    await configuration.settings.set("image", "saved-image");
+    assert.equal(await configuration.image("explicit-image"), "explicit-image");
+    assert.equal(await configuration.image(), "environment-image");
+    delete environment.ORBITAL_IMAGE;
+    assert.equal(await configuration.image(), "saved-image");
+    await configuration.settings.unset("image");
+    assert.equal(await configuration.image(), undefined);
+    assert.equal(JSON.stringify(configuration.settings.snapshot()).includes("test-secret"), false);
+    assert.equal((await readFile(configuration.settings.filePath, "utf8")).includes("test-secret"), false);
+    for (const missing of [undefined, "", " "]) {
+      environment.E2B_API_KEY = missing;
+      assert.throws(() => configuration.e2b(), { code: "missing_api_key" });
+      assert.equal(await configuration.image(), undefined);
+    }
+    environment.ORBITAL_IMAGE = " ";
+    await assert.rejects(configuration.image(), { code: "configuration" });
+    assert.equal(await configuration.image("explicit-image"), "explicit-image");
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("the Node adapter uses the XDG fallback for empty or relative config paths", () => {
   for (const value of [undefined, "", "relative-path"]) {

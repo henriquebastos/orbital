@@ -45,16 +45,21 @@ export async function orbitalRecipe(): Promise<{
     .runCmd(installCommand, { user: "root" })
     .runCmd(linkCommand, { user: "root" })
     .runCmd(runtimeCheckCommand, { user: "user" });
+  const sourceHash = hashBaseRecipe(await Template.toJSON(template, false), { cpuCount, memoryMB },
+    payloadPaths.map((path, index) => ({ path, bytes: payload[index]! })));
+  return { sourceHash, template, cpuCount, memoryMB };
+}
+
+export function hashBaseRecipe(templateJSON: string, resources: { cpuCount: number; memoryMB: number },
+  files: ReadonlyArray<{ path: string; bytes: Uint8Array }>): string {
   const digest = createHash("sha256");
   digest.update("orbital-base-recipe:v1");
-  digest.update(await Template.toJSON(template, false));
-  digest.update(JSON.stringify({ cpuCount, memoryMB }));
-  for (let index = 0; index < payloadPaths.length; index++) {
-    const bytes = payload[index]!;
-    digest.update(payloadPaths[index]!);
+  digest.update(templateJSON);
+  digest.update(JSON.stringify({ cpuCount: resources.cpuCount, memoryMB: resources.memoryMB }));
+  for (const { path, bytes } of files) {
+    digest.update(path);
     digest.update(String(bytes.length));
     digest.update(bytes);
   }
-  const sourceHash = digest.digest("hex");
-  return { sourceHash, template, cpuCount, memoryMB };
+  return digest.digest("hex");
 }

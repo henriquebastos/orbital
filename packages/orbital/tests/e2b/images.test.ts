@@ -7,7 +7,7 @@ import { test } from "node:test";
 
 import { createImages, type ImageEffects, type ImageSeed } from "../../src/hangar/images/preparation.js";
 import { OrbitalError } from "../../src/operations.js";
-import { createE2BImages } from "../../src/e2b/images.js";
+import { createE2BImages, createE2BImageEffects } from "../../src/e2b/images.js";
 import { ImageRecords, type ImageArtifact } from "../../src/hangar/images/records.js";
 
 const base: ImageArtifact = { reference: "base:one", templateId: "base", buildId: "one", kind: "template" };
@@ -23,7 +23,9 @@ async function fixture(run: (ctx: { effects: ImageEffects; records: ImageRecords
     async available(artifact) { calls.push(`available:${artifact.reference}`); return artifact.reference !== "deleted"; },
     async external(reference) { calls.push(`external:${reference}`); return { ...base, reference }; },
     async recipe() { calls.push("recipe"); return { sourceHash: "recipe-one", template: {}, cpuCount: 2, memoryMB: 1024 }; },
-    async buildBase() { calls.push("build"); return base; },
+    async findBuild(name) { calls.push(`find:${name}`); return undefined; },
+    async submitBuild() { calls.push("build"); return base; },
+    async waitForBuild() { calls.push("wait"); },
     async createSeed(_base, attemptId) {
       calls.push("seed");
       const seed: ImageSeed = {
@@ -61,6 +63,75 @@ test("a ready preparation is reused and a deleted artifact is rebuilt", async ()
   const third = await images.ensure({ preparation: "echo one" });
   assert.notEqual(third.reference, first.reference);
   assert.equal(calls.filter((call) => call === "seed").length, 2);
+}));
+
+test("independent caches discover the same remote base without submitting a build", async () => fixture(async ({ effects, records, calls, directory }) => {
+  const names: string[] = [];
+  effects.findBuild = async (name) => { names.push(name); return { artifact: base, status: "ready" }; };
+  const first = await createImages(effects, records).ensure({});
+  const other = await createImages(effects, new ImageRecords(join(directory, "other-host"), effects.scope)).ensure({});
+  assert.equal(first.reference, "base:one");
+  assert.equal(other.reference, first.reference);
+  assert.equal(first.reused && other.reused, true);
+  assert.deepEqual(names, ["orbital-base-recipe-one", "orbital-base-recipe-one"]);
+  assert.equal(calls.includes("build"), false);
+  assert.equal(calls.includes("wait"), false);
+}));
+
+test("a pending remote build is recorded before waiting and is not submitted again", async () => fixture(async ({ effects, records, calls }) => {
+  effects.findBuild = async () => ({ artifact: base, status: "building" });
+  effects.waitForBuild = async (artifact) => {
+    assert.equal(artifact.buildId, "one");
+    calls.push("wait");
+    throw new OrbitalError("uncertain", "base_build_cancelled", "Wait cancelled.");
+  };
+  const images = createImages(effects, records);
+  await assert.rejects(images.ensure({}), { code: "base_build_cancelled" });
+  const recovered = await images.ensure({});
+  assert.equal(recovered.reference, "base:one");
+  assert.equal(recovered.reused, true);
+  assert.equal(calls.includes("build"), false);
+  assert.equal(calls.filter(call => call === "wait").length, 1);
+}));
+
+test("lookup failures do not submit builds or publish ready records", async () => fixture(async ({ effects, records, calls }) => {
+  effects.findBuild = async () => { throw new OrbitalError("not_started", "image_lookup_failed", "Forbidden."); };
+  await assert.rejects(createImages(effects, records).ensure({}), { code: "image_lookup_failed" });
+  assert.equal(calls.includes("build"), false);
+  assert.deepEqual(await records.keys(), []);
+}));
+
+test("simultaneous remote misses can build twice without overwriting either host's exact result", async () => fixture(async ({ effects, records, directory }) => {
+  let release!: () => void;
+  const bothLookups = new Promise<void>(resolve => { release = resolve; });
+  let lookups = 0;
+  let builds = 0;
+  effects.findBuild = async () => {
+    if (++lookups === 2) release();
+    await bothLookups;
+    return undefined;
+  };
+  effects.submitBuild = async name => {
+    const buildId = String(++builds);
+    return { ...base, reference: `${name}:${buildId}`, buildId };
+  };
+  const [first, second] = await Promise.all([
+    createImages(effects, records).ensure({}),
+    createImages(effects, new ImageRecords(join(directory, "second-host"), effects.scope)).ensure({}),
+  ]);
+  assert.equal(builds, 2);
+  assert.notEqual(first.reference, second.reference);
+  assert.equal(first.reused || second.reused, false);
+}));
+
+test("a failed remote build permits a new submission; refresh bypasses discovery", async () => fixture(async ({ effects, records, calls }) => {
+  effects.findBuild = async () => { calls.push("find"); return { artifact: base, status: "error" }; };
+  const images = createImages(effects, records);
+  assert.equal((await images.ensure({})).reused, false);
+  assert.equal((await images.ensure({ refresh: true })).reused, false);
+  assert.equal(calls.filter(call => call === "find").length, 1);
+  assert.equal(calls.filter(call => call === "build").length, 2);
+  assert.equal(calls.filter(call => call === "wait").length, 2);
 }));
 
 test("failed refresh preserves the previous ready image", async () => fixture(async ({ effects, records }) => {
@@ -116,7 +187,7 @@ test("failed base refresh leaves its previous ready record", async () => fixture
   const images = createImages(effects, records);
   const first = await images.ensure({});
   assert.equal(first.reused, false);
-  effects.buildBase = async () => { throw new OrbitalError("failed", "base_build_failed", "Build failed."); };
+  effects.submitBuild = async () => { throw new OrbitalError("failed", "base_build_failed", "Build failed."); };
   await assert.rejects(images.ensure({ refresh: true }),
     (cause) => cause instanceof OrbitalError && cause.code === "base_build_failed");
   const after = await images.ensure({});
@@ -220,7 +291,7 @@ test("a forbidden captured-image verification recovers without rerunning prepara
 test("owned base refresh waits for an in-flight base build", async () => fixture(async ({ effects, records, calls }) => {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
-  effects.buildBase = async () => {
+  effects.submitBuild = async () => {
     calls.push("build");
     if (calls.filter((call) => call === "build").length === 1) await gate;
     return base;

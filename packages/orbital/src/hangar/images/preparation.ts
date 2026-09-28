@@ -14,6 +14,15 @@ export interface BaseRecipe {
   memoryMB: number;
 }
 
+export interface ImageBuild {
+  artifact: ImageArtifact;
+  status: "waiting" | "building" | "ready" | "error";
+}
+
+export function baseImageName(sourceHash: string): string {
+  return `orbital-base-${sourceHash}`;
+}
+
 export interface ImageSeed {
   id: string;
   writeScript(script: string): Promise<void>;
@@ -28,8 +37,9 @@ export interface ImageEffects {
   available(artifact: ImageArtifact): Promise<boolean>;
   external(reference: string): Promise<ImageArtifact>;
   recipe(): Promise<BaseRecipe>;
-  buildBase(name: string, recipe: BaseRecipe, observer: Observer | undefined,
-    onSubmitted: (artifact: ImageArtifact) => Promise<void>): Promise<ImageArtifact>;
+  findBuild(name: string): Promise<ImageBuild | undefined>;
+  submitBuild(name: string, recipe: BaseRecipe, observer?: Observer): Promise<ImageArtifact>;
+  waitForBuild(artifact: ImageArtifact, observer?: Observer): Promise<void>;
   createSeed(base: ImageArtifact, attemptId: string): Promise<ImageSeed>;
 }
 
@@ -137,14 +147,16 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     cancelled(observer);
     const attempt: ImageAttempt = { version: 1, key, scope: effects.scope, attemptId: randomUUID(),
       state: "active", stage: "build_intent", updatedAt: new Date().toISOString() };
-    const name = `orbital-v2-runner-${recipe.sourceHash.slice(0, 12)}-${attempt.attemptId}`;
+    const name = baseImageName(recipe.sourceHash);
+    const existing = !request.refresh || request.preparation !== undefined ? await effects.findBuild(name) : undefined;
     attempt.generationName = name;
     await records.writeAttempt(attempt);
-    observer?.onProgress?.({ phase: "building_base" });
+    const reuse = existing !== undefined && existing.status !== "error";
+    observer?.onProgress?.({ phase: reuse ? "reusing_base" : "building_base" });
     try {
-      const artifact = await effects.buildBase(name, recipe, observer, async (submitted) => {
-        await saveAttempt(attempt, "base_build_submitted", { artifact: submitted });
-      });
+      const artifact = reuse ? existing.artifact : await effects.submitBuild(name, recipe, observer);
+      await saveAttempt(attempt, "base_build_submitted", { artifact });
+      if (!reuse || existing.status !== "ready") await effects.waitForBuild(artifact, observer);
       await saveAttempt(attempt, "base_built", { artifact });
       if (!await effects.available(artifact)) {
         throw new OrbitalError("failed", "base_unavailable", "The built base image is not ready.", { reference: artifact.reference });
@@ -154,7 +166,7 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
         createdAt: new Date().toISOString() };
       await records.writeReady(record);
       await saveAttempt(attempt, "ready", { state: "ready" });
-      return { artifact, reused: false };
+      return { artifact, reused: reuse };
     } catch (cause) {
       const error = issue(cause, attempt.stage, attempt);
       await saveAttempt(attempt, attempt.stage, { state: error.outcome === "uncertain" ||

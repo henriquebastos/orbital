@@ -1,7 +1,11 @@
 export { createOrbital } from "./hangar/index.js";
 export { Workspace } from "./workspace.js";
 export { createE2BProvider, type E2BProviderConfig } from "./e2b/provider.js";
-export { createE2BImages } from "./e2b/images.js";
+export { createE2BImages, createE2BImageEffects } from "./e2b/images.js";
+export { createImages, baseImageName } from "./hangar/images/preparation.js";
+export type { BaseRecipe, ImageBuild, ImageEffects, ImageSeed } from "./hangar/images/preparation.js";
+export { orbitalRecipe, hashBaseRecipe } from "./hangar/images/recipe.js";
+export { ImageRecords, type ImageArtifact } from "./hangar/images/records.js";
 export { OrbitalError } from "./operations.js";
 export type { AllocationRequest, Provider } from "./provider.js";
 export type { CreationIntent, OrbSnapshot } from "./orb.js";

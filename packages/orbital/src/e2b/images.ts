@@ -14,7 +14,7 @@ import {
   Template,
 } from "e2b";
 
-import { createImages, type BaseRecipe, type ImageEffects, type ImageSeed } from "../hangar/images/preparation.js";
+import { createImages, type BaseRecipe, type ImageBuild, type ImageEffects, type ImageSeed } from "../hangar/images/preparation.js";
 import { OrbitalError, type Observer } from "../operations.js";
 import type { Images } from "../hangar/images/types.js";
 import { orbitalRecipe, runtimeCheckCommand } from "../hangar/images/recipe.js";
@@ -71,12 +71,10 @@ function statusCode(cause: unknown): number | undefined {
   return undefined;
 }
 
-export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: string }): Images {
+export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirectory?: string }): ImageEffects {
   if (!config.apiKey) throw imageError("not_started", "missing_api_key", "E2B_API_KEY is required.");
-  if (!config.cacheDirectory) throw imageError("not_started", "missing_cache_directory", "A cache directory is required.");
   const options = sdkOptions(config);
   const scope = scopeFor(config);
-  const records = new ImageRecords(config.cacheDirectory, scope);
 
   async function apiGet(path: string): Promise<{ data: unknown; nextToken?: string } | undefined> {
     let response: Response;
@@ -217,13 +215,48 @@ export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: st
     }
   }
 
-  const effects: ImageEffects = {
+  return {
     scope,
     available,
     external: templateArtifact,
     recipe: orbitalRecipe,
-    async buildBase(name: string, recipe: BaseRecipe, observer: Observer | undefined,
-      onSubmitted: (artifact: ImageArtifact) => Promise<void>): Promise<ImageArtifact> {
+    async findBuild(name): Promise<ImageBuild | undefined> {
+      const alias = await apiGet(`/templates/aliases/${encodeURIComponent(name)}`);
+      if (!alias) return undefined;
+      const templateId = (alias.data as { templateID?: unknown })?.templateID;
+      if (typeof templateId !== "string" || !templateId) {
+        throw imageError("not_started", "image_lookup_failed", "The E2B image alias has invalid data.");
+      }
+      let nextToken: string | undefined;
+      let pending: ImageBuild | undefined;
+      let failed: ImageBuild | undefined;
+      for (let count = 0; count < 100; count++) {
+        const page = await apiGet(`/templates/${encodeURIComponent(templateId)}?limit=100${nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : ""}`);
+        if (!page) throw imageError("not_started", "image_lookup_failed", "The E2B image disappeared during lookup.");
+        const data = page.data as { templateID?: unknown; builds?: Array<{ buildID?: unknown; status?: unknown }> };
+        if (!data || data.templateID !== templateId || !Array.isArray(data.builds)) {
+          throw imageError("not_started", "image_lookup_failed", "The E2B image build list has invalid data.");
+        }
+        for (const build of data.builds) {
+          if (!build || typeof build.buildID !== "string" || !build.buildID ||
+            !["waiting", "building", "ready", "error"].includes(build.status as string)) {
+            throw imageError("not_started", "image_lookup_failed", "The E2B image build has invalid data.");
+          }
+          const result: ImageBuild = { artifact: { reference: `${name}:${build.buildID}`, templateId,
+            buildId: build.buildID, kind: "template" }, status: build.status as ImageBuild["status"] };
+          if (result.status === "ready") return result;
+          if (result.status === "error") failed ??= result;
+          else pending ??= result;
+        }
+        nextToken = page.nextToken;
+        if (!nextToken) {
+          if (pending || failed) return pending ?? failed;
+          throw imageError("not_started", "image_lookup_failed", "The E2B image has no visible builds.");
+        }
+      }
+      throw imageError("not_started", "image_lookup_failed", "The E2B image build list exceeded the page limit.");
+    },
+    async submitBuild(name: string, recipe: BaseRecipe, observer?: Observer): Promise<ImageArtifact> {
       if (observer?.signal?.aborted) throw imageError("not_started", "cancelled", "Base build was cancelled before submission.");
       let result: Awaited<ReturnType<typeof Template.buildInBackground>>;
       try {
@@ -236,27 +269,32 @@ export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: st
       }
       const artifact: ImageArtifact = { reference: `${name}:${result.buildId}`, templateId: result.templateId,
         buildId: result.buildId, kind: "template" };
-      await onSubmitted(artifact);
+      return artifact;
+    },
+    async waitForBuild(artifact, observer): Promise<void> {
+      const { templateId, buildId } = artifact;
+      if (!buildId) throw imageError("not_started", "invalid_build", "A build ID is required.");
       const startedAt = Date.now();
       while (true) {
         if (observer?.signal?.aborted) throw imageError("uncertain", "base_build_cancelled", "The base build remains active after cancellation.",
-          { name, templateId: result.templateId, buildId: result.buildId });
+          { templateId, buildId });
         let status: Awaited<ReturnType<typeof Template.getBuildStatus>>;
-        try { status = await Template.getBuildStatus(result, options); }
+        try { status = await Template.getBuildStatus({ templateId, buildId }, options); }
         catch (cause) {
           throw imageError("uncertain", "base_build_status_unknown", "The base build status could not be read.",
-            { name, templateId: result.templateId, buildId: result.buildId,
+            { templateId, buildId,
               cause: cause instanceof Error ? cause.name : "unknown" });
         }
-        if (status.status === "ready") return artifact;
+        if (status.status === "ready") return;
         if (status.status === "error") throw imageError("failed", "base_build_failed", "The E2B base build failed.",
-          { name, templateId: result.templateId, buildId: result.buildId, reason: status.reason?.message });
+          { templateId, buildId, reason: status.reason?.message });
         if (Date.now() - startedAt > 30 * 60_000) throw imageError("uncertain", "base_build_deadline", "The base build exceeded its observation deadline.",
-          { name, templateId: result.templateId, buildId: result.buildId });
+          { templateId, buildId });
         await new Promise<void>((resolve) => setTimeout(resolve, 2_000));
       }
     },
     async createSeed(base: ImageArtifact, attemptId: string): Promise<ImageSeed> {
+      if (!config.cacheDirectory) throw imageError("not_started", "missing_cache_directory", "A cache directory is required for preparation logs.");
       const logDirectory = join(config.cacheDirectory, scope, "logs");
       const logPath = join(logDirectory, `${attemptId}.log`);
       await mkdir(logDirectory, { recursive: true, mode: 0o700 });
@@ -382,7 +420,12 @@ export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: st
       };
     },
   };
-  const images = createImages(effects, records);
+}
+
+export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: string }): Images {
+  if (!config.cacheDirectory) throw imageError("not_started", "missing_cache_directory", "A cache directory is required.");
+  const effects = createE2BImageEffects(config);
+  const images = createImages(effects, new ImageRecords(config.cacheDirectory, effects.scope));
   return {
     async ensure(request, observer) {
       try { return await images.ensure(request, observer); }

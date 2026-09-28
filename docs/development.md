@@ -1,6 +1,6 @@
 # 1 Development environment
 
-Project commands read their required environment variables directly.
+Orbital's Node configuration adapter resolves environment variables and saved settings for project commands.
 Each developer or execution environment chooses how to supply those values.
 The project does not require a specific secret manager or service account.
 
@@ -10,7 +10,7 @@ The project does not require a specific secret manager or service account.
 | --- | --- |
 | Build, typecheck, and local tests | No hosted credentials. |
 | `image:build` and `test:preparation` | `E2B_API_KEY`. |
-| Other hosted tests and `test:acceptance` | `E2B_API_KEY` and `ORBITAL_IMAGE`. |
+| Other hosted tests and `test:acceptance` | `E2B_API_KEY`. `ORBITAL_IMAGE` is an optional override. |
 
 The image command and hosted tests fail when required values are missing, before allocating remote resources.
 These checks verify presence. E2B verifies credential validity when a command contacts the service.
@@ -53,17 +53,15 @@ Run ordinary commands:
 npm run test:hosted -- --case basic
 ```
 
-The hook supplies `ORBITAL_IMAGE` from `.agents/test-image` unless an explicit value is already set.
-This file pins a non-secret E2B image reference to an exact build.
-E2B stores the image independently of Amp orbs. Each fresh checkout selects the same build without a shared local cache.
-The E2B credential must have access to that image. Do not delete the pinned image while checkouts still use it.
-After changes to Pod or the image recipe, run `env -u ORBITAL_IMAGE npm run image:build` with approval.
-Update `.agents/test-image` with the returned `reference` and commit it alongside the guest changes.
-The local image cache detects recipe changes. It is not a registry shared between Amp orbs.
+Orbital discovers the default base under `orbital-base-{recipe-hash}` in E2B.
+Fresh installations reuse a ready build or wait for a visible pending build. A missing image triggers a build.
+Recipe changes select a new name. No image reference belongs in Amp settings or the repository.
+The E2B credential must have access to the image. Keep shared base images while installations still use them.
+`ORBITAL_IMAGE` remains an optional explicit override, resolved through Orbital configuration.
 The hook captures Bash-quoted exports in memory. It writes no resolved secrets to disk and leaves Amp's `~/.env` unchanged.
 Each login shell makes a 1Password request. Existing shells retain their values until replaced.
 Commands receive plaintext environment variables without output masking. Never print secrets or enable shell tracing.
-Without an Environment ID, the hook loads only the image reference. With an ID, authentication failures stop the shell before it runs commands.
+Without an Environment ID, the hook does nothing. With an ID, authentication failures stop the shell before it runs commands.
 After changing Amp settings, use `amp orb restart-processes` to refresh the current orb's environment.
 After changing values in 1Password, start a new login shell. Restart existing services to refresh their inherited environment.
 Hosted checks require separate approval because they create E2B resources.

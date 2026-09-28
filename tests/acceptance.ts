@@ -2,11 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { checkedState, saveReceipt } from "./support/receipts.js";
+import { createOrbitalConfiguration } from "../packages/orbital/src/configuration/orbital.js";
 
 const directory = resolve("test-output", `${new Date().toISOString().replaceAll(":", "-")}-acceptance`);
-const image = process.env.ORBITAL_IMAGE;
-if (!image || !process.env.E2B_API_KEY) {
-  saveReceipt("acceptance", { status: "blocked", reason: "ORBITAL_IMAGE and E2B_API_KEY are required.",
+let image: string | undefined;
+try { createOrbitalConfiguration().e2b(); }
+catch (cause) {
+  saveReceipt("acceptance", { status: "blocked", reason: cause instanceof Error ? cause.message : "Invalid configuration.",
     cleanup: "No allocation created", skips: [] }, directory);
   process.exit(1);
 }
@@ -53,6 +55,9 @@ try {
   if (!simulation[0]) throw new Error("Simulation did not save a replay receipt.");
   await run("replay", ["--import", "tsx", "packages/orbital/tests/contracts/simulation.ts", "--replay", simulation[0]], 60_000);
   await run("sensitivity", ["--import", "tsx", "tests/sensitivity/run.ts"], 240_000);
+  const { hostedConfiguration } = await import("./support/hosted-configuration.js");
+  ({ image } = await hostedConfiguration());
+  process.env.ORBITAL_IMAGE = image;
   await run("linux", ["--import", "tsx", "tests/integration/linux-hosted.ts"], 180_000);
   await run("lifetime", ["--import", "tsx", "tests/integration/lifetime.ts"], 600_000);
   await run("hosted", ["--import", "tsx", "tests/integration/pi-flow.ts", "--case", "all"], 1_800_000);

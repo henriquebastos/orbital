@@ -2,10 +2,13 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { Sandbox, SandboxNotFoundError } from "e2b";
+import { createE2BImages } from "@henriquebastosnet/orbital";
+import { createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 
-const image = process.env.ORBITAL_IMAGE;
-const apiKey = process.env.E2B_API_KEY;
-if (!image || !apiKey) throw new Error("ORBITAL_IMAGE and E2B_API_KEY are required.");
+const configuration = createOrbitalConfiguration();
+const { apiKey } = configuration.e2b();
+const { reference: image } = await createE2BImages({ apiKey, cacheDirectory: configuration.cacheDirectory })
+  .ensure({ image: await configuration.image() });
 const baked = process.argv.includes("--baked");
 const source = await readFile(resolve(import.meta.dirname, "../src/orbital-runner.mjs"));
 const testSource = await readFile(resolve(import.meta.dirname, "runner.test.mjs"));

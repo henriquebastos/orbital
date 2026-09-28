@@ -44,7 +44,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 (
   unset OP_ENVIRONMENT_ID OP_SERVICE_ACCOUNT_TOKEN ORBITAL_IMAGE
   source .agents/environment
-  bash --noprofile --norc -c '[[ "$ORBITAL_IMAGE" == orbital-v2-runner-*:????????-????-????-????-???????????? ]]'
+  [[ -z "${ORBITAL_IMAGE+x}" ]]
 )
 (
   unset OP_ENVIRONMENT_ID OP_SERVICE_ACCOUNT_TOKEN

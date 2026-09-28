@@ -25,9 +25,9 @@ The orb's login shell loads that Environment automatically through `.agents/envi
 Run ordinary commands, such as `npm run test:hosted -- --case basic`, without a wrapper.
 The service account needs read access to that 1Password Environment.
 Keep `E2B_API_KEY` in 1Password, not Amp settings.
-The hook defaults `ORBITAL_IMAGE` to the non-secret E2B build reference in `.agents/test-image`.
-New orbs reuse that remote image without sharing a local cache. Keep the referenced image in E2B.
-After guest recipe changes, rebuild with `env -u ORBITAL_IMAGE npm run image:build` and update `.agents/test-image`.
+Orbital configuration owns environment resolution. Use `createOrbitalConfiguration()` instead of reading credentials in callers.
+Hosted checks discover the default image by recipe hash in E2B and build it when absent. `ORBITAL_IMAGE` is an optional override.
+Keep shared base images in E2B. Disposable preparation tests use an isolated recipe identity for cleanup.
 Never export resolved secrets into setup snapshots, shell profiles, or `.env` files.
 Commands inherit plaintext secrets in memory without output masking. Never print the environment or enable shell tracing.
 Run `bash tests/orb-environment.sh` after changes to the environment hook.

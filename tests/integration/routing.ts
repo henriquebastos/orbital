@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createOrbital, createE2BProvider } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
+import { hostedConfiguration } from "../support/hosted-configuration.js";
 
 interface RpcEvent {
   id?: string;
@@ -14,13 +15,7 @@ interface RpcEvent {
   message?: { customType?: string; content?: string; details?: Record<string, unknown> };
 }
 
-const image = process.env.ORBITAL_IMAGE;
-const apiKey = process.env.E2B_API_KEY;
-if (!image || !apiKey) {
-  saveReceipt("hosted-routing", { status: "blocked", reason: "ORBITAL_IMAGE and E2B_API_KEY are required.",
-    cleanup: "No allocation created", skips: [] });
-  process.exit(1);
-}
+const { apiKey, image } = await hostedConfiguration();
 const provider = createE2BProvider({ apiKey });
 const orbital = createOrbital({ provider });
 const directory = mkdtempSync(resolve(tmpdir(), "orbital-hosted-routing-"));

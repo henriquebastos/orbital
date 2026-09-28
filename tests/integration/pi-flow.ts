@@ -5,15 +5,12 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createOrbital, createE2BProvider } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
+import { hostedConfiguration } from "../support/hosted-configuration.js";
 
 interface Call { name: string; arguments: Record<string, unknown> }
 interface PiEvent { type: string; toolName?: string; isError?: boolean; result?: { content?: { type: string; text?: string }[]; details?: Record<string, unknown> }; [key: string]: unknown }
-const image = process.env.ORBITAL_IMAGE;
-if (!image || !process.env.E2B_API_KEY) {
-  saveReceipt("hosted-pi", { status: "blocked", reason: "ORBITAL_IMAGE and E2B_API_KEY are required.", skips: [], cleanup: "No allocations created" });
-  process.exit(1);
-}
-const provider = createE2BProvider({ apiKey: process.env.E2B_API_KEY });
+const { apiKey, image } = await hostedConfiguration();
+const provider = createE2BProvider({ apiKey });
 const orbital = createOrbital({ provider });
 const directory = mkdtempSync(resolve(tmpdir(), "orbital-hosted-pi-"));
 const session = resolve(directory, "session.jsonl");
@@ -276,7 +273,7 @@ try {
     assert.match(JSON.stringify(recreated[2]), /RECREATED/);
     assert.equal(readFileSync(resolve(directory, "sentinel.txt"), "utf8"), "HOST_ONLY");
   }
-  assert.equal(readFileSync(session, "utf8").includes(process.env.E2B_API_KEY!), false, "Session records must not contain the provider key.");
+  assert.equal(readFileSync(session, "utf8").includes(apiKey), false, "Session records must not contain the provider key.");
 } catch (error) { failure = error instanceof Error ? error.stack : String(error); }
 finally {
   if (orbId) {

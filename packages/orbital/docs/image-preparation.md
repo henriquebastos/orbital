@@ -5,12 +5,13 @@ Pi supplies the image manager automatically. Library callers supply both adapter
 
 ```ts
 import { createOrbital, createE2BProvider, createE2BImages } from "@henriquebastosnet/orbital";
-import { imageCacheDirectory } from "@henriquebastosnet/orbital/settings/node";
+import { createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 
-const apiKey = process.env.E2B_API_KEY!;
+const configuration = createOrbitalConfiguration();
+const e2b = configuration.e2b();
 const orbital = createOrbital({
-  provider: createE2BProvider({ apiKey }),
-  images: createE2BImages({ apiKey, cacheDirectory: imageCacheDirectory() }),
+  provider: createE2BProvider(e2b),
+  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory }),
 });
 ```
 
@@ -46,6 +47,32 @@ Creation follows this order:
 Preparation returns `{ reference, baseReference, cacheKey, reused }`.
 These fields help callers inspect the cache. Normal creation does not require callers to manage image references.
 The existing observer reports progress and preparation output.
+
+### Composable operations
+
+`createE2BImageEffects(config)` exposes provider operations without running the orchestration or creating cache records.
+Lookup, submission, and waiting do not require a cache directory. Preparation seeds require one for their logs.
+
+| Primitive | Contract |
+| --- | --- |
+| `orbitalRecipe()` | Read the bundled recipe and payload and return its content hash and build inputs. No network calls. |
+| `hashBaseRecipe(templateJSON, resources, files)` | Hash explicit inputs without reading files or contacting E2B. File order and exact bytes matter. |
+| `baseImageName(sourceHash)` | Derive the stable `orbital-base-{sourceHash}` name. |
+| `effects.findBuild(name)` | Read remote state. Return a ready build, otherwise a pending or failed build. Only a missing alias returns `undefined`. |
+| `effects.submitBuild(name, recipe, observer?)` | Submit one build and return its identity without waiting for completion. |
+| `effects.waitForBuild(artifact, observer?)` | Poll that exact build. Never submit or delete an image. |
+| `effects.external(reference)` | Resolve an explicit reference to an exact ready build. |
+| `effects.available(artifact)` | Check the recorded artifact without building. |
+| `effects.createSeed(base, attemptId)` | Create a preparation seed with separate write, execute, check, capture, and delete operations. |
+
+`createImages(effects, records)` composes these operations with durable local receipts.
+`createE2BImages(config)` supplies the E2B effects and `ImageRecords` implementation.
+Callers can use the primitives directly or supply their own composition and record location.
+
+The default composition checks its local receipt, then looks up the content-addressed name in E2B.
+It reuses a ready build, waits for a pending build, or submits after confirmed absence or a terminal failed build.
+Lookup errors stop the flow. They never count as absence.
+Each allocation uses an exact build reference, not a mutable tag.
 
 ## 1b Explicit checkout
 
@@ -128,7 +155,8 @@ If final Orb allocation fails, the prepared image remains available.
 
 The cache keeps current records, per-attempt history, and script logs. Raw provider credentials are not stored in those records.
 Cache scope includes a fingerprint of the credential and the provider endpoint. Credential rotation starts a separate local cache scope.
-This conservative scope does not require an extra account setting. It does not provide reuse across credentials for the same account.
+Remote base discovery permits reuse across installations and credentials with access to the same E2B image.
+Prepared-script images still use the local cache and are not discovered across hosts.
 
 An interrupted attempt with a recorded artifact can recover after a read-only check confirms that the artifact is ready.
 An uncertain attempt without a recorded artifact stops automatic preparation. Its generation name and any known seed ID remain available for investigation.
@@ -136,6 +164,8 @@ This version has no automatic reconciliation for that case. Preserve the attempt
 Unconfirmed seed deletion appears in the attempt record and the `seed_cleanup_unknown` progress event.
 
 Requests within one image manager serialize matching cache work. Separate processes and hosts have no shared coordination guarantee.
+Two hosts can both observe a missing image and submit builds. E2B exposes no documented atomic claim operation.
+Orbital does not retry an uncertain submission. Later callers can reuse a visible ready build under the shared name.
 The local cache is not a global image registry. Refresh retains old image generations rather than deleting artifacts that an Orb may still use.
 
 Pi conservatively retains its requested allocation state after a creation failure, including preparation failure.

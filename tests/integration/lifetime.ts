@@ -10,6 +10,7 @@ import { Sandbox } from "e2b";
 
 import { createE2BProvider, type OrbSnapshot } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
+import { hostedConfiguration } from "../support/hosted-configuration.js";
 
 type CaseName = "silent" | "timeout" | "cancel" | "early" | "admission";
 interface Call { name: string; arguments: Record<string, unknown> }
@@ -33,13 +34,17 @@ interface PiRun {
 
 let activePi: PiRun | undefined;
 
-const image = process.env.ORBITAL_IMAGE;
-const apiKey = process.env.E2B_API_KEY;
 const requested = process.argv.includes("--case") ? process.argv[process.argv.indexOf("--case") + 1] : "all";
 const selected: CaseName[] = requested === "all" ? ["silent", "timeout", "cancel", "early", "admission"] : [requested as CaseName];
 const runId = randomUUID();
 const receiptDirectory = resolve("test-output", `lifetime-${runId}`);
-const provider = apiKey ? createE2BProvider({ apiKey }) : undefined;
+if (selected.some(name => !["silent", "timeout", "cancel", "early", "admission"].includes(name))) {
+  saveReceipt("hosted-lifetime", { status: "blocked", reason: "A valid --case is required.",
+    selected, cleanup: "No allocations created", skips: [] }, receiptDirectory);
+  process.exit(1);
+}
+const { apiKey, image } = await hostedConfiguration();
+const provider = createE2BProvider({ apiKey });
 const attempts: Record<string, unknown>[] = [];
 const startedAt = Date.now();
 const deadline = startedAt + 9 * 60_000;
@@ -473,12 +478,6 @@ async function runCase(name: CaseName): Promise<boolean> {
     image, runId, attempts, durationMs: Date.now() - startedAt,
     real, substituted, skips: selected.filter((item) => !attempts.some((attempt) => attempt.name === item)) }, receiptDirectory);
   return passed;
-}
-
-if (!image || !apiKey || !provider || selected.some((name) => !["silent", "timeout", "cancel", "early", "admission"].includes(name))) {
-  saveReceipt("hosted-lifetime", { status: "blocked", reason: "Valid --case, ORBITAL_IMAGE, and E2B_API_KEY are required.",
-    selected, attempts, cleanup: "No allocations created", skips: [] }, receiptDirectory);
-  process.exit(1);
 }
 
 let passed = true;

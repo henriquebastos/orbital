@@ -5,14 +5,9 @@ import { resolve } from "node:path";
 
 import { createE2BProvider, OrbitalError, type OrbSnapshot } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
+import { hostedConfiguration } from "../support/hosted-configuration.js";
 
-const image = process.argv[2] ?? process.env.ORBITAL_IMAGE ?? "";
-const apiKey = process.env.E2B_API_KEY;
-if (!image || !apiKey) {
-  saveReceipt("hosted-e2b", { status: "blocked", reason: "ORBITAL_IMAGE and E2B_API_KEY are required.",
-    durationMs: 0, cleanup: "No allocation created", skips: [] });
-  process.exit(1);
-}
+const { apiKey, image } = await hostedConfiguration(process.argv[2]);
 
 const startedAt = Date.now();
 const runId = randomUUID();

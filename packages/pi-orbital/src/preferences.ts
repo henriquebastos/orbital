@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { delimiter, isAbsolute } from "node:path";
 import { orbitalSettingsSchema, type SettingsSchema } from "@henriquebastosnet/orbital/settings";
-import { createNodeSettings } from "@henriquebastosnet/orbital/settings/node";
+import { createNodeSettings, createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 
 interface PiPreferences { autoOn: boolean; skillRoots: string[] }
 
@@ -31,8 +31,8 @@ const piPreferencesSchema: SettingsSchema<PiPreferences> = {
   },
 };
 
-export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string) {
-  const settings = createNodeSettings({ schema: orbitalSettingsSchema });
+export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
+  settings = createOrbitalConfiguration().settings) {
   const preferences = createNodeSettings({ schema: piPreferencesSchema, fileName: "pi.json" });
   const ready = Promise.all([settings.refresh(), preferences.refresh()]);
   async function options() {

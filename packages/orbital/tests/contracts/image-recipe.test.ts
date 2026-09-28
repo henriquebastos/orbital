@@ -6,9 +6,23 @@ import test from "node:test";
 
 import { Template } from "e2b";
 
-import { orbitalRecipe, runtimeCheckCommand } from "../../src/hangar/images/recipe.js";
+import { hashBaseRecipe, orbitalRecipe, runtimeCheckCommand } from "../../src/hangar/images/recipe.js";
+import { baseImageName } from "../../src/hangar/images/preparation.js";
 
 const root = resolve(import.meta.dirname, "../..");
+
+test("recipe identity includes resource sizes, file paths, and exact bytes", () => {
+  const resources = { cpuCount: 2, memoryMB: 1024 };
+  const files = [{ path: "runner", bytes: Buffer.from("hello\n") }];
+  const original = hashBaseRecipe("recipe", resources, files);
+  assert.equal(hashBaseRecipe("recipe", { memoryMB: 1024, cpuCount: 2 }, files), original);
+  assert.notEqual(hashBaseRecipe("recipe", { ...resources, cpuCount: 4 }, files), original);
+  assert.notEqual(hashBaseRecipe("recipe", { ...resources, memoryMB: 2048 }, files), original);
+  assert.notEqual(hashBaseRecipe("changed", resources, files), original);
+  assert.notEqual(hashBaseRecipe("recipe", resources, [{ ...files[0]!, path: "renew" }]), original);
+  assert.notEqual(hashBaseRecipe("recipe", resources, [{ path: "runner", bytes: Buffer.from("hello") }]), original);
+  assert.equal(baseImageName(original), `orbital-base-${original}`);
+});
 
 test("the base recipe preserves the runner install and runtime checks", async () => {
   const first = await orbitalRecipe();

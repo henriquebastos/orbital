@@ -23,30 +23,32 @@ Callers supply a provider, an orb ID, and explicit operation parameters:
 
 ```ts
 import { createOrbital, createE2BProvider, createE2BImages } from "@henriquebastosnet/orbital";
-import { imageCacheDirectory } from "@henriquebastosnet/orbital/settings/node";
+import { createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 
-const apiKey = process.env.E2B_API_KEY!;
+const configuration = createOrbitalConfiguration();
+const e2b = configuration.e2b();
 const orbital = createOrbital({
-  provider: createE2BProvider({ apiKey }),
-  images: createE2BImages({ apiKey, cacheDirectory: imageCacheDirectory() }),
+  provider: createE2BProvider(e2b),
+  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory }),
 });
 await orbital.create({ orbId: "my-workspace", idleTimeoutMs: 60000 });
 const workspace = await orbital.openWorkspace({ orbId: "my-workspace", orbCwd: "/home/user" });
 await workspace.exec({ command: "pwd" });
 ```
 
-An optional Node adapter loads shared defaults:
+The Node configuration owns credential resolution, image overrides, and saved settings:
 
 ```ts
-import { orbitalSettingsSchema } from "@henriquebastosnet/orbital/settings";
-import { createNodeSettings } from "@henriquebastosnet/orbital/settings/node";
-
-const settings = createNodeSettings({ schema: orbitalSettingsSchema });
+const settings = configuration.settings;
 const { effective, diagnostics } = await settings.refresh();
 if (diagnostics.length) throw new Error("Repair the reported Orbital settings.");
 await orbital.create({ orbId: "my-workspace", ...effective });
 ```
 
+`configuration.e2b()` returns validated provider configuration or throws before remote work.
+`configuration.image(override?)` resolves an explicit value, environment override, or saved value, in that order.
+`settings.set(key, value)` and `settings.unset(key)` edit saved values after refresh. Unsetting does not remove environment overrides.
+Credentials are never included in saved settings or settings snapshots.
 The settings adapter does not perform Orbital operations. A CLI or another agent integration can reuse either interface independently.
 
 
