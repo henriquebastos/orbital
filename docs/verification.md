@@ -1,7 +1,7 @@
 # 1 Verify Orbital
 
 Run tests from the repository root after `npm ci`. Use Node 22.19.0 or later.
-Real Pi terminal tests need `pi`, `expect`, and a POSIX host. Install `expect` with your system package manager.
+Real Pi tests need `pi`, `expect`, `ripgrep`, and a POSIX host. Install `expect` and `ripgrep` with your system package manager.
 Installation tests also need npm registry access.
 
 ## 1a Run local checks
