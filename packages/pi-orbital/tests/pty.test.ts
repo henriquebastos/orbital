@@ -22,6 +22,7 @@ test("real Pi PTY keeps a remote orb across a follow-up user turn", async () => 
     ORBITAL_PI_BIN: pi,
     ORBITAL_PI_EXTENSION: extension,
     ORBITAL_PI_SESSION: session,
+    ORBITAL_PI_TRACE: resolve(directory, "startup.jsonl"),
     ORBITAL_PI_CALLS: JSON.stringify([
       { name: "orbital", arguments: { action: "create_and_attach" } },
       { name: "bash", arguments: { command: 'printf REMOTE_PTY > marker; printf "PTY_OUT_%s" "$(cat marker)"' } },

@@ -1,11 +1,14 @@
-set timeout 2
 spawn -noecho $env(ORBITAL_PI_BIN) --offline --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve --extension $env(ORBITAL_PI_EXTENSION) --provider orbital-fixture --model probe --tools orbital,bash,read --session $env(ORBITAL_PI_SESSION)
 send_user "__PTY_CHILD_PID__[exp_pid]\n"
 
-expect {
-  -re {Orbital fixture|Type your message|Press Enter} {}
-  timeout {}
-  eof { exit 2 }
+set startup_deadline [expr {[clock milliseconds] + 12000}]
+while {![file exists $env(ORBITAL_PI_TRACE)]} {
+  expect -timeout 0 {
+    eof { exit 2 }
+    timeout {}
+  }
+  if {[clock milliseconds] >= $startup_deadline} { exit 2 }
+  after 50
 }
 set timeout 12
 send -- "Create the orb and run the marker command.\r"
