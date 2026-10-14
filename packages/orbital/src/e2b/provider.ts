@@ -42,6 +42,26 @@ interface JobStatus {
   pid?: number;
   pgid?: number;
   scopeStopped?: boolean;
+  renewal?: unknown;
+}
+
+function renewalEvidence(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const input = value as Record<string, unknown>;
+  if (typeof input.category !== "string" || !["timeout", "aborted", "authentication", "rate_limit",
+    "not_found", "unavailable", "http", "network", "unknown", "configuration"].includes(input.category)) return undefined;
+  const result: Record<string, unknown> = { category: input.category };
+  for (const key of ["durationMs", "attempt"]) {
+    if (Number.isSafeInteger(input[key]) && (input[key] as number) >= 0) result[key] = input[key];
+  }
+  if (Number.isInteger(input.httpStatus) && (input.httpStatus as number) >= 100 && (input.httpStatus as number) <= 599) {
+    result.httpStatus = input.httpStatus;
+  }
+  if (input.lastSuccessAt === null || (typeof input.lastSuccessAt === "string" &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(input.lastSuccessAt) && Number.isFinite(Date.parse(input.lastSuccessAt)))) {
+    result.lastSuccessAt = input.lastSuccessAt;
+  }
+  return result;
 }
 
 function error(outcome: "not_started" | "uncertain", code: string, message: string,
@@ -382,15 +402,17 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           observer?.onProgress?.({ phase: "started", orbId: orb.orbId });
         }
         if (status?.state === "finished") {
+          const renewal = renewalEvidence(status.renewal);
+          const diagnostics = renewal === undefined ? {} : { renewal };
           if (status.scopeStopped === false) {
             throw error("uncertain", "termination_unknown", "Managed process termination is not confirmed.",
               { jobId, resourceId: orb.resourceId, outputPath, partialOutput,
-                outcome: status.outcome, pid: status.pid, pgid: status.pgid });
+                outcome: status.outcome, pid: status.pid, pgid: status.pgid, ...diagnostics });
           }
           if (status.outcome === "failed") {
             throw error(status.phase === "pre_execution" ? "not_started" : "uncertain",
               status.errorCode ?? "job_failed", "The remote runner failed.",
-              { jobId, resourceId: orb.resourceId, outputPath, partialOutput, phase: status.phase });
+              { jobId, resourceId: orb.resourceId, outputPath, partialOutput, phase: status.phase, ...diagnostics });
           }
           if ((status.outcome === "cancelled" || status.outcome === "timed_out") &&
             status.scopeStopped !== true) {

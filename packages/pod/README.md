@@ -20,6 +20,12 @@ The image exposes `orbital-runner` as a command. Jobs save their files under `/h
 Ordinary commands renew the Orb while they run. Background services do not renew the Orb.
 Cancellation and timeout stop the managed process group. Transport loss does not cancel or replay work.
 
+A renewal failure still stops the managed process group. The five-second request timeout and renewal schedule are unchanged.
+Renewal failure records include `renewal`: an allowlisted error category, a valid HTTP status when available, attempt count, duration in milliseconds, and the last successful renewal timestamp.
+`lastSuccessAt` is `null` when no renewal succeeded. Configuration failures before a request use attempt zero.
+Durations use a monotonic clock; timestamps use UTC. Messages, stacks, headers, URLs, and arbitrary error codes are excluded.
+The E2B adapter validates these fields again before exposing them in error evidence. Pi includes that evidence in the failed tool result.
+
 ## 1b Verification
 
 Run `npm run test:linux` from the repository root with `E2B_API_KEY` and `ORBITAL_IMAGE` set.

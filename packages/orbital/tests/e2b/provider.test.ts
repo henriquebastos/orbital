@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
+import { Sandbox } from "e2b";
 
 import { OrbitalError } from "../../src/operations.js";
 import type { OrbSnapshot } from "../../src/orb.js";
@@ -14,6 +15,40 @@ const orb: OrbSnapshot = {
   idleTimeoutMs: 60_000,
   sandboxDomain: "region.e2b.app",
 };
+
+test("runner renewal diagnostics reach callers without arbitrary guest fields", async (t) => {
+  const lastSuccessAt = "2026-09-29T03:00:29.000Z";
+  const expected = { category: "timeout", durationMs: 5004, attempt: 8, lastSuccessAt, httpStatus: 504 };
+  let renewal: unknown = { ...expected, message: "SECRET_MESSAGE", stack: "SECRET_STACK",
+    headers: { authorization: "SECRET_HEADER" }, cause: { token: "SECRET_CAUSE" } };
+  t.mock.method(Sandbox, "connect", async () => ({
+    files: {
+      async makeDir() {}, async write() {}, async rename() {},
+      async exists(path: string) { return path.endsWith("/status.json"); },
+      async read() { return JSON.stringify({ state: "finished", outcome: "failed", errorCode: "renewal_failed",
+        scopeStopped: true, renewal }); },
+    },
+    commands: { async run() {} },
+  }));
+  const provider = createE2BProvider({ apiKey: "test-only" });
+  async function failure() {
+    let evidence;
+    await assert.rejects(provider.exec(orb, { command: "true", orbCwd: "/home/user" }), cause => {
+      assert.ok(cause instanceof OrbitalError);
+      assert.equal(cause.code, "renewal_failed");
+      assert.doesNotMatch(JSON.stringify(cause.evidence), /SECRET_/);
+      evidence = cause.evidence.renewal;
+      return true;
+    });
+    return evidence;
+  }
+  assert.deepEqual(await failure(), expected);
+  renewal = { category: "network", httpStatus: 999, durationMs: -1, attempt: "SECRET_ATTEMPT", lastSuccessAt: "SECRET_TIME" };
+  assert.deepEqual(await failure(), { category: "network" });
+  for (renewal of [undefined, null, "SECRET_VALUE", { category: "SECRET_CATEGORY" }]) {
+    assert.equal(await failure(), undefined);
+  }
+});
 
 test("the adapter rejects an unenforced background timeout before launch", async () => {
   const provider = createE2BProvider({ apiKey: "test-only" });

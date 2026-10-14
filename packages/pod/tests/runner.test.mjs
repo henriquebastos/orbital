@@ -41,7 +41,17 @@ async function launch(t, request, options = {}) {
   const root = await mkdtemp(join(tmpdir(), "orbital-runner-"));
   const renewalModule = join(root, "renew.mjs");
   await writeFile(renewalModule,
-    "import { appendFile } from 'node:fs/promises'; let calls = 0; export async function renew() { calls++; await appendFile(process.env.ORBITAL_RENEW_LOG, 'renew\\n'); if (calls > Number(process.env.ORBITAL_FAIL_RENEW_AFTER ?? Infinity)) throw new Error('fixture renewal failure'); if (calls > Number(process.env.ORBITAL_STALL_RENEW_AFTER ?? Infinity)) await new Promise(() => {}); }\n");
+    `import { appendFile } from 'node:fs/promises';
+let calls = 0;
+export async function renew() {
+  calls++;
+  await appendFile(process.env.ORBITAL_RENEW_LOG, 'renew\\n');
+  if (calls > Number(process.env.ORBITAL_FAIL_RENEW_AFTER ?? Infinity)) {
+    await new Promise(resolve => setTimeout(resolve, Number(process.env.ORBITAL_RENEW_FAILURE_DELAY_MS ?? 0)));
+    throw Object.assign(new Error('fixture renewal failure'), JSON.parse(process.env.ORBITAL_RENEW_FAILURE ?? '{}'));
+  }
+  if (calls > Number(process.env.ORBITAL_STALL_RENEW_AFTER ?? Infinity)) await new Promise(() => {});
+}\n`);
   const id = randomUUID();
   const job = join(root, id);
   await mkdir(job);
@@ -57,14 +67,19 @@ async function launch(t, request, options = {}) {
     detached: true,
     stdio: "ignore",
     env: {
-      ...process.env,
+      PATH: process.env.PATH,
+      HOME: root,
+      USER: "user",
+      LANG: "C.UTF-8",
       ORBITAL_JOBS_DIR: root,
       ORBITAL_RENEW_MODULE: pathToFileURL(renewalModule).href,
       ORBITAL_RENEW_LOG: join(root, "renewals"),
       ORBITAL_RENEW_INTERVAL_MS: "70",
       ...(options.failRenewAfter === undefined ? {} : { ORBITAL_FAIL_RENEW_AFTER: String(options.failRenewAfter) }),
+      ...(options.renewalFailure === undefined ? {} : { ORBITAL_RENEW_FAILURE: JSON.stringify(options.renewalFailure) }),
+      ORBITAL_RENEW_FAILURE_DELAY_MS: String(options.renewalFailureDelayMs ?? 0),
       ...(options.stallRenewAfter === undefined ? {} : { ORBITAL_STALL_RENEW_AFTER: String(options.stallRenewAfter) }),
-      E2B_API_KEY: "test-key",
+      E2B_API_KEY: options.renewalKey ?? "test-key",
       HOST_ONLY_SECRET: "host-secret",
     },
   });
@@ -243,6 +258,71 @@ test("a renewal failure stops the active process group before reporting failure"
   await writeFile(join(root, "release"), "");
   await new Promise((resolveWait) => setTimeout(resolveWait, 200));
   await assert.rejects(readFile(join(root, "late-marker")), { code: "ENOENT" });
+});
+
+test("renewal diagnostics preserve timing and last success without exposing exception contents", async (t) => {
+  const begin = Date.now();
+  const { job, root } = await launch(t, {
+    mode: "ordinary", command: "sleep 10", cwd: "/tmp", sandboxId: "sandbox-test",
+  }, { failRenewAfter: 1, renewalFailureDelayMs: 40, renewalFailure: {
+    name: "TimeoutError", message: "SECRET_MESSAGE", stack: "SECRET_STACK",
+    cause: { code: "SECRET_CODE", message: "SECRET_CAUSE" }, headers: { authorization: "SECRET_HEADER" },
+  } });
+  const status = await waitForStatus(join(job, "status.json"), value => value.state === "finished");
+  assert.equal(status.errorCode, "renewal_failed");
+  assert.equal(status.scopeStopped, true);
+  assert.equal(status.renewal.category, "timeout");
+  assert.equal(status.renewal.attempt, 2);
+  assert.ok(status.renewal.durationMs >= 30, JSON.stringify(status));
+  assert.ok(Date.parse(status.renewal.lastSuccessAt) >= begin);
+  assert.ok(Date.parse(status.renewal.lastSuccessAt) <= Date.now());
+  assert.equal(status.renewal.httpStatus, undefined);
+  for (const file of ["status.json", "combined", "stdout", "stderr"]) {
+    assert.doesNotMatch(await readFile(join(job, file), "utf8"), /SECRET_|instance-token|test-key/);
+  }
+  assert.equal((await readFile(join(root, "renewals"), "utf8")).trim().split("\n").length, 2);
+});
+
+test("first renewal failures report only allowlisted categories and valid HTTP status", async (t) => {
+  const cases = [
+    [{ name: "AuthenticationError", statusCode: 401 }, "authentication", 401],
+    [{ name: "RateLimitError" }, "rate_limit", 429],
+    [{ name: "ServiceBusyError" }, "unavailable", 503],
+    [{ name: "SandboxNotFoundError" }, "not_found", 404],
+    [{ name: "SandboxError", statusCode: 502 }, "unavailable", 502],
+    [{ name: "SandboxError", statusCode: 409 }, "http", 409],
+    [{ name: "AbortError" }, "aborted", undefined],
+    [{ name: "TypeError", cause: { code: "ECONNRESET" } }, "network", undefined],
+    [{ name: "TypeError", cause: { code: "UND_ERR_CONNECT_TIMEOUT" } }, "timeout", undefined],
+    [{ name: "SECRET_NAME", statusCode: "SECRET_STATUS", cause: { code: "SECRET_CODE" } }, "unknown", undefined],
+    [{ name: "Error", statusCode: 999 }, "unknown", undefined],
+  ];
+  for (const [renewalFailure, category, httpStatus] of cases) {
+    const { job, root } = await launch(t, {
+      mode: "ordinary", command: root => `touch ${join(root, "unexpected")}`, cwd: "/tmp", sandboxId: "sandbox-test",
+    }, { failRenewAfter: 0, renewalFailure: { ...renewalFailure, message: "SECRET_MESSAGE" } });
+    const status = await waitForStatus(join(job, "status.json"), value => value.state === "finished");
+    assert.equal(status.phase, "pre_execution");
+    assert.equal(status.renewal.category, category);
+    assert.equal(status.renewal.httpStatus, httpStatus);
+    assert.equal(status.renewal.lastSuccessAt, null);
+    assert.equal(status.renewal.attempt, 1);
+    assert.ok(status.renewal.durationMs >= 0);
+    assert.doesNotMatch(JSON.stringify(status), /SECRET_/);
+    await assert.rejects(readFile(join(root, "unexpected")), { code: "ENOENT" });
+  }
+});
+
+test("missing renewal credentials report configuration failure without claiming an HTTP attempt", async (t) => {
+  const { job, root } = await launch(t, {
+    mode: "ordinary", command: "printf unexpected", cwd: "/tmp", sandboxId: "sandbox-test",
+  }, { renewalKey: "" });
+  const status = await waitForStatus(join(job, "status.json"), value => value.state === "finished");
+  assert.equal(status.errorCode, "renewal_failed");
+  assert.equal(status.phase, "pre_execution");
+  assert.deepEqual(status.renewal, { category: "configuration", attempt: 0, durationMs: 0, lastSuccessAt: null });
+  assert.equal(await readFile(join(job, "combined"), "utf8"), "");
+  await assert.rejects(readFile(join(root, "renewals")), { code: "ENOENT" });
 });
 
 test("a denied first renewal prevents command execution", async (t) => {

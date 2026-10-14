@@ -37,6 +37,30 @@ async function status(value) {
   await rename(tempPath, statusPath);
 }
 
+function renewalErrorDetails(cause) {
+  // Exception messages, stacks, headers, and arbitrary codes can contain credentials.
+  const knownStatus = { AuthenticationError: 401, RateLimitError: 429,
+    ServiceBusyError: 503, SandboxNotFoundError: 404 };
+  const reportedStatus = cause?.statusCode;
+  const httpStatus = Number.isInteger(reportedStatus) && reportedStatus >= 100 && reportedStatus <= 599
+    ? reportedStatus : Object.hasOwn(knownStatus, cause?.name) ? knownStatus[cause.name] : undefined;
+  const codes = [cause?.code, cause?.cause?.code];
+  let category = "unknown";
+  if (cause?.name === "TimeoutError" || httpStatus === 408 || httpStatus === 504 ||
+      codes.some(code => ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code))) {
+    category = "timeout";
+  } else if (cause?.name === "AbortError") category = "aborted";
+  else if (httpStatus === 401 || httpStatus === 403) category = "authentication";
+  else if (httpStatus === 429) category = "rate_limit";
+  else if (httpStatus === 404) category = "not_found";
+  else if (httpStatus >= 500) category = "unavailable";
+  else if (httpStatus !== undefined) category = "http";
+  else if (codes.some(code => ["ECONNRESET", "ECONNREFUSED", "EAI_AGAIN", "ENOTFOUND", "ENETUNREACH", "EHOSTUNREACH", "EPIPE", "UND_ERR_SOCKET"].includes(code))) {
+    category = "network";
+  }
+  return { category, ...(httpStatus === undefined ? {} : { httpStatus }) };
+}
+
 function writeAll(fd, chunk) {
   for (let offset = 0; offset < chunk.length;) {
     offset += writeSync(fd, chunk, offset, chunk.length - offset);
@@ -125,15 +149,31 @@ async function run() {
   delete environment.E2B_API_KEY;
 
   let renew;
+  let renewalAttempts = 0;
+  let lastRenewalSuccessAt = null;
+  let renewalFailure;
+  async function renewLease(signal) {
+    const startedAt = performance.now();
+    renewalAttempts++;
+    try {
+      await renew({ sandboxId: request.sandboxId, apiKey: process.env.E2B_API_KEY,
+        windowMs: request.idleTimeoutMs, signal });
+      lastRenewalSuccessAt = new Date().toISOString();
+    } catch (cause) {
+      renewalFailure = { ...renewalErrorDetails(cause), attempt: renewalAttempts,
+        durationMs: Math.round(performance.now() - startedAt), lastSuccessAt: lastRenewalSuccessAt };
+      throw cause;
+    }
+  }
   if (request.mode === "ordinary") {
     try {
       if (!process.env.E2B_API_KEY) throw new Error("Renewal key is missing.");
       ({ renew } = await import(process.env.ORBITAL_RENEW_MODULE ?? "./renew.mjs"));
-      await renew({ sandboxId: request.sandboxId, apiKey: process.env.E2B_API_KEY,
-        windowMs: request.idleTimeoutMs });
+      await renewLease();
     } catch {
       await status({ state: "finished", jobId, outcome: "failed", phase: "pre_execution",
-        errorCode: "renewal_failed", error: "Renewal failed.", scopeStopped: true });
+        errorCode: "renewal_failed", error: "Renewal failed.", scopeStopped: true,
+        renewal: renewalFailure ?? { category: "configuration", attempt: 0, durationMs: 0, lastSuccessAt: null } });
       await stdout.close();
       await stderr.close();
       await combined.close();
@@ -213,16 +253,14 @@ async function run() {
       }
       if (renewalError) {
         outcome = "failed";
-        failure = { errorCode: "renewal_failed", error: "Renewal failed." };
+        failure = { errorCode: "renewal_failed", error: "Renewal failed.", renewal: renewalFailure };
         scopeStopped = await stopGroup(child.pid);
         break;
       }
       if (request.mode === "ordinary" && !renewalInFlight && performance.now() >= nextRenewAt) {
         renewalInFlight = true;
         renewalAbort = new AbortController();
-        Promise.resolve().then(() => renew({ sandboxId: request.sandboxId,
-          apiKey: process.env.E2B_API_KEY, windowMs: request.idleTimeoutMs,
-          signal: renewalAbort.signal }))
+        Promise.resolve().then(() => renewLease(renewalAbort.signal))
           .catch(() => { renewalError = true; })
           .finally(() => { renewalInFlight = false; });
         nextRenewAt = performance.now() + renewIntervalMs;

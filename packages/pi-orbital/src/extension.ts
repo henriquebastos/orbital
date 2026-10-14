@@ -101,7 +101,7 @@ function displayBash(text: string, outputPath: string): string {
 function presentError(error: unknown): Error {
   if (!(error instanceof OrbitalError)) return error instanceof Error ? error : new Error(String(error));
   const keys = ["orbId", "resourceId", "jobId", "outputPath", "path", "partialOutput",
-    "phase", "cause", "pid", "pgid", "outcome"];
+    "phase", "cause", "pid", "pgid", "outcome", "renewal"];
   const evidence = Object.fromEntries(keys.flatMap(key => {
     const value = error.evidence[key];
     if (value === undefined) return [];
