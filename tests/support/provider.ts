@@ -8,7 +8,8 @@ export class SimulatedProvider implements Provider {
   beforeRead?: () => Promise<void>;
   async resolve(orbId: string) { return this.orbs.find(orb => orb.orbId === orbId); }
   async create(request: AllocationRequest) {
-    const orb: OrbSnapshot = { ...request, resourceId: `allocation-${this.orbs.length + 1}`, state: "running" };
+    const { env: _env, ...identity } = request;
+    const orb: OrbSnapshot = { ...identity, resourceId: `allocation-${this.orbs.length + 1}`, state: "running" };
     this.orbs.push(orb);
     this.effects.push(`create:${orb.resourceId}`);
     return orb;

@@ -58,7 +58,7 @@ async function runPi(label: string, calls: Call[]): Promise<PiEvent[]> {
     "--mode", "json", "--session", session, "--print", "Run the fixed fixture."];
   const child = spawn(resolve("node_modules/.bin/pi"), args, { cwd: directory, env: { ...process.env,
     PI_CODING_AGENT_DIR: resolve(directory, "agent"), XDG_CONFIG_HOME: configHome,
-    ORBITAL_AUTO_ON: "false", ORBITAL_PI_CALLS: JSON.stringify(calls),
+    ORBITAL_AUTO_ON: "false", ORBITAL_FORWARD_ENV: "E2B_API_KEY", ORBITAL_PI_CALLS: JSON.stringify(calls),
     ORBITAL_IMAGE: image, ORBITAL_IDLE_TIMEOUT_MS: "30000", ORBITAL_SECRET_SENTINEL: "HOST_SECRET_MUST_NOT_LEAVE" }, stdio: ["ignore", "pipe", "pipe"] });
   let stdout = ""; let stderr = "";
   child.stdout.on("data", chunk => { stdout += chunk.toString(); });

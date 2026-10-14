@@ -5,6 +5,7 @@ export interface OrbSnapshot {
   state: "running" | "sleeping";
   idleTimeoutMs: number;
   sandboxDomain?: string;
+  resources?: { cpuCount: number; memoryMB: number };
   creationIntent?: CreationIntent;
 }
 

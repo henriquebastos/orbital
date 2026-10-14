@@ -2,17 +2,22 @@ import { randomUUID } from "node:crypto";
 import { readFile, mkdir, rename, rm, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { resolveSettings, type SettingsDiagnostic, type SettingsSchema, type SettingsSnapshot } from "./settings.js";
+import { resolveSettings, type SettingsDiagnostic, type SettingsSchema, type SettingsSnapshot, type SettingsSources } from "./settings.js";
 
 export interface NodeSettingsOptions<T extends object> {
   schema: SettingsSchema<T>;
   directory?: string;
   fileName?: string;
+  userProjectFilePath?: string;
+  projectFilePath?: string;
   environment?: Record<string, string | undefined>;
 }
 
 export interface NodeSettings<T extends object> {
   readonly filePath: string;
+  readonly userProjectFilePath?: string;
+  readonly projectFilePath?: string;
+  readonly selectedProjectFilePath?: string;
   snapshot(): SettingsSnapshot<T>;
   refresh(): Promise<SettingsSnapshot<T>>;
   set<K extends keyof T>(key: K, value: T[K]): Promise<SettingsSnapshot<T>>;
@@ -49,12 +54,12 @@ async function readText(path: string): Promise<string | undefined> {
   }
 }
 
-function parseText(path: string, text: string | undefined): { user: unknown; diagnostics: SettingsDiagnostic[] } {
+function parseText(path: string, text: string | undefined, source: Exclude<SettingsDiagnostic["source"], "environment"> = "user"): { user: unknown; diagnostics: SettingsDiagnostic[] } {
   if (text === undefined) return { user: {}, diagnostics: [] };
   try {
     return { user: JSON.parse(text) as unknown, diagnostics: [] };
   } catch {
-    return { user: {}, diagnostics: [{ source: "user", path, message: "contains malformed JSON" }] };
+    return { user: {}, diagnostics: [{ source, path, message: "contains malformed JSON" }] };
   }
 }
 
@@ -67,6 +72,16 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
     throw new Error("The settings file name must be a single path segment.");
   }
   const filePath = join(directory, fileName);
+  const { userProjectFilePath, projectFilePath } = options;
+  const projectLayers = [
+    { source: "project", path: projectFilePath },
+    { source: "userProject", path: userProjectFilePath },
+  ] as const;
+  for (const { path } of projectLayers) {
+    if (path !== undefined && !isAbsolute(path)) throw new Error("The project settings path must be absolute.");
+  }
+  const projectValues: Pick<SettingsSources, "userProject" | "project"> = {};
+  let projectDiagnostics: SettingsDiagnostic[] = [];
   let loaded = false;
   let revision: string | undefined;
   let user: unknown = {};
@@ -76,11 +91,14 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
   function project(text: string | undefined, readDiagnostics: SettingsDiagnostic[] = []): SettingsSnapshot<T> {
     const parsed = parseText(filePath, text);
     user = parsed.user;
-    current = resolveSettings(options.schema, { user, environment });
+    current = resolveSettings(options.schema, { user, ...projectValues, environment });
     current.diagnostics = [
       ...readDiagnostics,
       ...parsed.diagnostics,
-      ...current.diagnostics.map(diagnostic => diagnostic.source === "user" ? { ...diagnostic, path: filePath } : diagnostic),
+      ...projectDiagnostics,
+      ...current.diagnostics.map(diagnostic => diagnostic.source === "user" ? { ...diagnostic, path: filePath }
+        : diagnostic.source === "userProject" ? { ...diagnostic, path: userProjectFilePath }
+        : diagnostic.source === "project" ? { ...diagnostic, path: projectFilePath } : diagnostic),
     ];
     invalidUser = current.diagnostics.some(diagnostic => diagnostic.source === "user");
     revision = text;
@@ -90,6 +108,23 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
 
   async function refresh(): Promise<SettingsSnapshot<T>> {
     return serialWrite(filePath, async () => {
+      projectDiagnostics = [];
+      delete projectValues.project;
+      delete projectValues.userProject;
+      for (const { source, path } of projectLayers) {
+        if (path === undefined) continue;
+        try {
+          const text = await readText(path);
+          if (text === undefined) continue;
+          const parsed = parseText(path, text, source);
+          projectValues[source] = parsed.user;
+          projectDiagnostics.push(...parsed.diagnostics);
+        } catch {
+          projectValues[source] = {};
+          projectDiagnostics.push({ source, path, message: "Cannot read project settings file." });
+        }
+        break;
+      }
       try {
         return project(await readText(filePath));
       } catch (error) {
@@ -131,6 +166,11 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
 
   return {
     filePath,
+    userProjectFilePath,
+    projectFilePath,
+    get selectedProjectFilePath() {
+      return current.project !== undefined ? projectFilePath : current.userProject !== undefined ? userProjectFilePath : undefined;
+    },
     snapshot,
     refresh,
     set: (key, value) => change(key, value, false),

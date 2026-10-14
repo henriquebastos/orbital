@@ -33,7 +33,7 @@ mkdirSync(configDirectory, { recursive: true });
 writeFileSync(resolve(configDirectory, "settings.json"), JSON.stringify({ image, idleTimeoutMs: 30000 }) + "\n");
 writeFileSync(resolve(configDirectory, "pi.json"), JSON.stringify({ autoOn: false, skillRoots: [] }) + "\n");
 const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
-  XDG_CONFIG_HOME: resolve(directory, "config"), ORBITAL_AUTO_ON: "false" };
+  XDG_CONFIG_HOME: resolve(directory, "config"), ORBITAL_AUTO_ON: "false", ORBITAL_FORWARD_ENV: "E2B_API_KEY" };
 delete env.ORBITAL_IMAGE;
 delete env.ORBITAL_IDLE_TIMEOUT_MS;
 

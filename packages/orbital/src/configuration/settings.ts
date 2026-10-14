@@ -10,7 +10,7 @@ export type SettingsSchema<T extends object> = {
 };
 
 export interface SettingsDiagnostic {
-  source: "user" | "environment";
+  source: "user" | "userProject" | "project" | "environment";
   key?: string;
   message: string;
   path?: string;
@@ -18,19 +18,30 @@ export interface SettingsDiagnostic {
 
 export interface SettingsSnapshot<T extends object> {
   saved: Partial<T>;
+  userProject?: Partial<T>;
+  project?: Partial<T>;
   effective: T;
-  source: { [K in keyof T]-?: "default" | "user" | "environment" };
+  source: { [K in keyof T]-?: "default" | "user" | "userProject" | "project" | "environment" };
   diagnostics: SettingsDiagnostic[];
 }
 
 export interface SettingsSources {
   user?: unknown;
+  userProject?: unknown;
+  project?: unknown;
   environment?: Record<string, string | undefined>;
 }
 
-export interface OrbitalSettings {
+export interface ImageResources {
+  cpuCount: number;
+  memoryMB: number;
+  minFreeDiskMb?: number;
+}
+
+export interface OrbitalSettings extends ImageResources {
   image?: string;
   idleTimeoutMs: number;
+  forwardEnv: string[];
 }
 
 function nonemptyString(value: unknown): string {
@@ -43,7 +54,39 @@ function idleTimeout(value: unknown): number {
   return value as number;
 }
 
+function environmentNames(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some(name => typeof name !== "string" || !name || name.includes("=") || name.includes("\0"))) {
+    throw new Error("forwardEnv must be an array of process environment variable names.");
+  }
+  return [...new Set(value)];
+}
+
+function resourceInteger(name: string, minimum: number, defaultValue: number): SettingDefinition<number> {
+  const parseSaved = (value: unknown): number => {
+    if (!Number.isSafeInteger(value) || (value as number) < minimum) {
+      throw new Error(`${name} must be a safe integer of at least ${minimum}.`);
+    }
+    return value as number;
+  };
+  return { environment: name, defaultValue, parseSaved,
+    parseEnvironment(value) {
+      if (!/^[0-9]+$/.test(value)) throw new Error(`${name} must contain decimal digits only.`);
+      return parseSaved(Number(value));
+    } };
+}
+
 export const orbitalSettingsSchema: SettingsSchema<OrbitalSettings> = {
+  cpuCount: resourceInteger("ORBITAL_CPU_COUNT", 1, 2),
+  memoryMB: resourceInteger("ORBITAL_MEMORY_MB", 128, 1024),
+  minFreeDiskMb: { ...resourceInteger("ORBITAL_MIN_FREE_DISK_MB", 0, 0), defaultValue: undefined },
+  forwardEnv: {
+    environment: "ORBITAL_FORWARD_ENV",
+    defaultValue: [],
+    parseSaved: environmentNames,
+    parseEnvironment(value) {
+      return environmentNames(value.trim() === "" ? [] : value.split(",").map(name => name.trim()));
+    },
+  },
   image: {
     environment: "ORBITAL_IMAGE",
     defaultValue: undefined,
@@ -66,23 +109,31 @@ export function resolveSettings<T extends object>(schema: SettingsSchema<T>, sou
   const effective = {} as T;
   const source = {} as SettingsSnapshot<T>["source"];
   const diagnostics: SettingsDiagnostic[] = [];
-  const validUser = sources.user === undefined ||
-    (sources.user !== null && typeof sources.user === "object" && !Array.isArray(sources.user));
-  const user = validUser && sources.user !== undefined ? sources.user as Record<string, unknown> : {};
-  if (!validUser) diagnostics.push({ source: "user", message: "must be a JSON object" });
+  const userProject: Partial<T> = {};
+  const project: Partial<T> = {};
+  const savedLayers = { user: saved, userProject, project };
+  const projectSource = sources.project !== undefined ? "project" : "userProject";
+  const layers = (["user", projectSource] as const).map(name => {
+    const input = sources[name];
+    const valid = input === undefined || (input !== null && typeof input === "object" && !Array.isArray(input));
+    if (!valid) diagnostics.push({ source: name, message: "must be a JSON object" });
+    const values = valid && input !== undefined ? input as Record<string, unknown> : {};
+    return { name, values, saved: savedLayers[name] };
+  });
 
   for (const key of Object.keys(schema) as (keyof T & string)[]) {
     const definition = schema[key];
     effective[key] = definition.defaultValue;
     source[key] = "default";
-    if (Object.hasOwn(user, key)) {
+    for (const layer of layers) {
+      if (!Object.hasOwn(layer.values, key)) continue;
       try {
-        const value = definition.parseSaved(user[key]);
-        saved[key] = value;
+        const value = definition.parseSaved(layer.values[key]);
+        layer.saved[key] = value;
         effective[key] = value;
-        source[key] = "user";
+        source[key] = layer.name;
       } catch {
-        diagnostics.push({ source: "user", key, message: `Invalid saved setting: ${key}.` });
+        diagnostics.push({ source: layer.name, key, message: `Invalid saved setting: ${key}.` });
       }
     }
     const rawEnvironment = sources.environment?.[definition.environment];
@@ -96,9 +147,12 @@ export function resolveSettings<T extends object>(schema: SettingsSchema<T>, sou
     }
   }
 
-  for (const key of Object.keys(user)) {
-    if (!Object.hasOwn(schema, key)) diagnostics.push({ source: "user", key, message: "is not a known setting" });
+  for (const layer of layers) {
+    for (const key of Object.keys(layer.values)) {
+      if (!Object.hasOwn(schema, key)) diagnostics.push({ source: layer.name, key, message: "is not a known setting" });
+    }
   }
 
-  return { saved, effective, source, diagnostics };
+  return { saved, ...(projectSource !== "userProject" || sources.userProject === undefined ? {} : { userProject }),
+    ...(sources.project === undefined ? {} : { project }), effective, source, diagnostics };
 }

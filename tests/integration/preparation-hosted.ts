@@ -133,6 +133,7 @@ async function waitForState(orbId: string, expected: "sleeping" | "running"): Pr
 
 async function testPreparation(): Promise<void> {
   ({ apiKey } = createOrbitalConfiguration().e2b());
+  const env = { E2B_API_KEY: apiKey, ORBITAL_ENV_PROBE: runId };
   const installed = await installPackage();
   sdk = installed.Sandbox;
   templateSdk = installed.Template;
@@ -152,7 +153,7 @@ async function testPreparation(): Promise<void> {
   } };
 
   record("cold_default_create_intent", { orbId: orbIds.base });
-  const baseOrb = await orbital.create({ orbId: orbIds.base, idleTimeoutMs: 30_000 }, observer);
+  const baseOrb = await orbital.create({ orbId: orbIds.base, idleTimeoutMs: 30_000, env }, observer);
   assert.ok(progress.includes("building_base"));
   ownArtifact(baseOrb.image);
   record("cold_default_created", { resourceId: baseOrb.resourceId, image: baseOrb.image, progress: [...progress] });
@@ -174,8 +175,8 @@ async function testPreparation(): Promise<void> {
   record("script_ready", { ...prepared, progress: [...progress], output: output.join("") });
 
   record("allocation_intent", { orbIds: [orbIds.one, orbIds.two] });
-  const one = await orbital.create({ orbId: orbIds.one, preparation, idleTimeoutMs: 30_000 });
-  const two = await orbital.create({ orbId: orbIds.two, preparation, idleTimeoutMs: 30_000 });
+  const one = await orbital.create({ orbId: orbIds.one, preparation, idleTimeoutMs: 30_000, env });
+  const two = await orbital.create({ orbId: orbIds.two, preparation, idleTimeoutMs: 30_000, env });
   assert.equal(one.image, prepared.reference);
   assert.equal(two.image, prepared.reference);
   assert.notEqual(one.resourceId, two.resourceId);
@@ -191,16 +192,16 @@ async function testPreparation(): Promise<void> {
   assert.equal(refreshed.reused, false);
   assert.notEqual(refreshed.reference, prepared.reference);
   ownArtifact(refreshed.reference);
-  const repeat = await orbital.create({ orbId: one.orbId, preparation, idleTimeoutMs: 30_000 });
+  const repeat = await orbital.create({ orbId: one.orbId, preparation, idleTimeoutMs: 30_000, env });
   assert.equal(repeat.resourceId, one.resourceId);
   record("refresh_preserved_existing_orb", { oldReference: prepared.reference,
     newReference: refreshed.reference, resourceId: repeat.resourceId });
   record("allocation_intent", { orbIds: [orbIds.refreshed] });
-  const fresh = await orbital.create({ orbId: orbIds.refreshed, preparation, idleTimeoutMs: 5_000 });
+  const fresh = await orbital.create({ orbId: orbIds.refreshed, preparation, idleTimeoutMs: 5_000, env });
   assert.equal(fresh.image, refreshed.reference);
 
   const workspace = await orbital.openWorkspace({ orbId: fresh.orbId, orbCwd: "/home/user" });
-  const long = await workspace.exec({ command: "sleep 8; printf 'renewed\\n'", timeoutMs: 20_000 });
+  const long = await workspace.exec({ command: `test "$ORBITAL_ENV_PROBE" = '${runId}' && test -n "$E2B_API_KEY" && gh --version >/dev/null && sleep 8 && printf 'renewed\\n'`, timeoutMs: 20_000 });
   assert.equal(long.kind, "exited");
   assert.equal(long.exitCode, 0);
   assert.match(long.stdout, /renewed/);
@@ -209,7 +210,7 @@ async function testPreparation(): Promise<void> {
   assert.equal(await sdk.pause(fresh.resourceId, { apiKey }), true);
   await waitForState(fresh.orbId, "sleeping");
   const woken = await orbital.openWorkspace({ orbId: fresh.orbId, orbCwd: "/home/user" });
-  const wakeResult = await woken.exec({ command: "printf 'awake\\n'" });
+  const wakeResult = await woken.exec({ command: `test "$ORBITAL_ENV_PROBE" = '${runId}' && test -n "$E2B_API_KEY" && printf 'awake\\n'` });
   assert.equal(wakeResult.exitCode, 0);
   assert.match(wakeResult.stdout, /awake/);
   record("pause_and_wake", { resourceId: fresh.resourceId, jobId: wakeResult.jobId });
@@ -234,7 +235,7 @@ async function testPreparation(): Promise<void> {
   } finally { clearTimeout(runnerAbortTimer); }
 
   record("allocation_intent", { orbIds: [orbIds.failed] });
-  await assert.rejects(orbital.create({ orbId: orbIds.failed, preparation: "exit 23", idleTimeoutMs: 30_000 }),
+  await assert.rejects(orbital.create({ orbId: orbIds.failed, preparation: "exit 23", idleTimeoutMs: 30_000, env }),
     (cause: unknown) => {
       const error = cause as { code?: string; outcome?: string; evidence?: Record<string, unknown> };
       record("script_rejected", { code: error.code, outcome: error.outcome, evidence: error.evidence });

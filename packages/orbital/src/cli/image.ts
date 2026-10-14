@@ -20,9 +20,10 @@ async function main(): Promise<void> {
   const configuration = createOrbitalConfiguration();
   const e2b = configuration.e2b();
   const image = await configuration.image(values.image);
+  const resources = image === undefined ? await configuration.resources() : undefined;
   const preparation = values.preparation === undefined ? undefined : await readFile(values.preparation, "utf8");
   const cacheDirectory = values["cache-directory"] === undefined ? configuration.cacheDirectory : resolve(values["cache-directory"]);
-  const orbital = createOrbital({ provider: createE2BProvider(e2b), images: createE2BImages({ ...e2b, cacheDirectory }) });
+  const orbital = createOrbital({ provider: createE2BProvider(e2b), images: createE2BImages({ ...e2b, cacheDirectory, resources }) });
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);

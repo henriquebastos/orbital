@@ -6,7 +6,7 @@ Add `--preparation FILE` to cache Bash preparation, or `--refresh` to build a ne
 For npm scripts, place these arguments after `--`.
 
 The base identity includes the recipe commands, resource profile, runner, renewal module, and pinned package manifests.
-The build checks Node 22.15.0, the renewal module import, passwordless sudo, and workspace tools.
+The build checks Node 22.15.0, the renewal module import, passwordless sudo, and workspace tools, including GitHub CLI (`gh`).
 The package ships the recipe and guest files. No source checkout or local Docker is required for the installed command.
 See [the preparation contract](image-preparation.md) for cache and refresh behavior.
 
@@ -14,4 +14,7 @@ See [the preparation contract](image-preparation.md) for cache and refresh behav
 
 E2B gives an automatically resumed sandbox at least five minutes before its next timeout. Orbital does not shorten that provider lease after HTTP wake. An exact idle delay after native wake is not guaranteed.
 
-The image stores no provider credential. Sandbox creation passes `E2B_API_KEY` to the guest runner for direct renewal. The runner removes that variable from Bash child environments. The user owns the sandbox and has passwordless sudo, so the key is accessible inside the orb under the accepted first-version policy.
+The image stores no instance environment or provider credential. Sandbox creation supplies environment variables through E2B's `envs` option.
+The caller must include `E2B_API_KEY` explicitly for direct renewal. The provider does not inject its own credential.
+The runner passes its complete environment to commands and services. Optional command overrides take precedence for that command.
+The user owns the sandbox and has passwordless sudo. Commands can access every inherited variable, including the renewal key.

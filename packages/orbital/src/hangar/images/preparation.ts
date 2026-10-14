@@ -12,6 +12,7 @@ export interface BaseRecipe {
   template: unknown;
   cpuCount: number;
   memoryMB: number;
+  minFreeDiskMb?: number;
 }
 
 export interface ImageBuild {

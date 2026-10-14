@@ -80,7 +80,10 @@ export async function renew() {
       ORBITAL_RENEW_FAILURE_DELAY_MS: String(options.renewalFailureDelayMs ?? 0),
       ...(options.stallRenewAfter === undefined ? {} : { ORBITAL_STALL_RENEW_AFTER: String(options.stallRenewAfter) }),
       E2B_API_KEY: options.renewalKey ?? "test-key",
-      HOST_ONLY_SECRET: "host-secret",
+      GH_TOKEN: "instance-token",
+      SANDBOX_URL: "https://instance.test",
+      INSTANCE_EMPTY: "",
+      INSTANCE_MULTILINE: "first\nsecond",
     },
   });
   child.unref();
@@ -231,16 +234,34 @@ test("a cancellation marker before launch prevents command execution", async (t)
   await assert.rejects(readFile(join(root, "unexpected")), { code: "ENOENT" });
 });
 
-test("the command gets selected environment values but no renewal key or host secret", async (t) => {
-  const { job } = await launch(t, {
-    mode: "background",
-    command: "printf '%s|%s|%s' \"$SELECTED\" \"${E2B_API_KEY-unset}\" \"${HOST_ONLY_SECRET-unset}\"",
-    cwd: "/tmp",
-    sandboxId: "sandbox-test",
-    env: { SELECTED: "chosen", E2B_API_KEY: "injected-key" },
+for (const mode of ["ordinary", "background"]) {
+  test(`${mode} commands and their children inherit the complete instance environment`, async (t) => {
+    const { job } = await launch(t, {
+      mode,
+      command: `bash -c 'test "$GH_TOKEN" = instance-token && test "$E2B_API_KEY" = test-key && test "$SANDBOX_URL" = https://instance.test && test "\${INSTANCE_EMPTY-unset}" = "" && test "$INSTANCE_MULTILINE" = "$(printf "first\\nsecond")" && printf inherited'`,
+      cwd: "/tmp",
+      sandboxId: "sandbox-test",
+    });
+    const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+    assert.equal(status.exitCode, 0, JSON.stringify(status));
+    assert.equal(await readFile(join(job, "stdout"), "utf8"), "inherited");
+    for (const file of ["request.json", "status.json", "combined"]) {
+      assert.doesNotMatch(await readFile(join(job, file), "utf8"), /"GH_TOKEN"\s*:|"E2B_API_KEY"\s*:/);
+    }
   });
-  await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
-  assert.equal(await readFile(join(job, "stdout"), "utf8"), "chosen|unset|unset");
+}
+
+test("command overrides take precedence without changing the instance environment", async (t) => {
+  const command = `printf '%s|%s|%s' "$GH_TOKEN" "$E2B_API_KEY" "$SANDBOX_URL"`;
+  const request = { mode: "ordinary", command, cwd: "/tmp", sandboxId: "sandbox-test" };
+  const overridden = await launch(t, { ...request, env: { GH_TOKEN: "command-token", E2B_API_KEY: "command-key" } });
+  const inherited = await launch(t, request);
+  for (const { job } of [overridden, inherited]) {
+    const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+    assert.equal(status.exitCode, 0);
+  }
+  assert.equal(await readFile(join(overridden.job, "stdout"), "utf8"), "command-token|command-key|https://instance.test");
+  assert.equal(await readFile(join(inherited.job, "stdout"), "utf8"), "instance-token|test-key|https://instance.test");
 });
 
 test("a renewal failure stops the active process group before reporting failure", async (t) => {

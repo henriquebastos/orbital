@@ -56,16 +56,33 @@ test("remote lookup prefers ready builds across pages and distinguishes absence 
   }
 });
 
+test("image effects resolve the current resource selection before each owned recipe", async () => {
+  let resources = { cpuCount: 2, memoryMB: 1024, minFreeDiskMb: 0 };
+  const effects = createE2BImageEffects({ apiKey: "test-only", resources: () => resources });
+  const small = await effects.recipe();
+  resources = { cpuCount: 8, memoryMB: 8192, minFreeDiskMb: 20480 };
+  const large = await effects.recipe();
+  assert.equal(large.cpuCount, 8);
+  assert.equal(large.memoryMB, 8192);
+  assert.equal(large.minFreeDiskMb, 20480);
+  assert.notEqual(small.sourceHash, large.sourceHash);
+});
+
 test("submission returns build identity without waiting; waiting never submits", async () => {
   const buildId = "123e4567-e89b-12d3-a456-426614174000";
   const requests: string[] = [];
   let status = "ready";
+  const bodies: Record<string, unknown>[] = [];
   const server = createServer((request, response) => {
     requests.push(`${request.method} ${request.url}`);
     response.setHeader("content-type", "application/json");
     if (request.method === "POST") {
-      request.resume();
-      response.writeHead(202).end(JSON.stringify({ templateID: "raw-id", buildID: buildId }));
+      let body = "";
+      request.on("data", chunk => { body += chunk; });
+      request.on("end", () => {
+        bodies.push(JSON.parse(body));
+        response.writeHead(202).end(JSON.stringify({ templateID: "raw-id", buildID: buildId }));
+      });
     } else {
       response.end(JSON.stringify({ templateID: "raw-id", buildID: buildId, status, logEntries: [] }));
     }
@@ -78,9 +95,12 @@ test("submission returns build identity without waiting; waiting never submits",
     const effects = createE2BImageEffects({ apiKey: "test-only", cacheDirectory: directory,
       apiUrl: `http://127.0.0.1:${address.port}` });
     const artifact = await effects.submitBuild("orbital-base-hash", {
-      sourceHash: "hash", template: Template().fromBaseImage(), cpuCount: 2, memoryMB: 1024,
+      sourceHash: "hash", template: Template().fromBaseImage(), cpuCount: 8, memoryMB: 8192, minFreeDiskMb: 20480,
     });
     assert.equal(artifact.reference, `orbital-base-hash:${buildId}`);
+    assert.equal(bodies[0]?.cpuCount, 8);
+    assert.equal(bodies[0]?.memoryMB, 8192);
+    assert.equal(bodies[0]?.minFreeDiskMb, 20480);
     assert.deepEqual(requests, ["POST /v3/templates", `POST /v2/templates/raw-id/builds/${buildId}`]);
     requests.length = 0;
     await effects.waitForBuild(artifact);

@@ -7,6 +7,7 @@ export interface AllocationRequest {
   image: string;
   idleTimeoutMs: number;
   creationIntent?: CreationIntent;
+  env?: Record<string, string>;
 }
 
 /** External effects only. The application owns policy and never retries mutations. */

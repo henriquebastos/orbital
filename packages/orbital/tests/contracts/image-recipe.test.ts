@@ -18,6 +18,8 @@ test("recipe identity includes resource sizes, file paths, and exact bytes", () 
   assert.equal(hashBaseRecipe("recipe", { memoryMB: 1024, cpuCount: 2 }, files), original);
   assert.notEqual(hashBaseRecipe("recipe", { ...resources, cpuCount: 4 }, files), original);
   assert.notEqual(hashBaseRecipe("recipe", { ...resources, memoryMB: 2048 }, files), original);
+  assert.notEqual(hashBaseRecipe("recipe", { ...resources, minFreeDiskMb: 20480 }, files), original);
+  assert.notEqual(hashBaseRecipe("recipe", { ...resources, minFreeDiskMb: 0 }, files), original);
   assert.notEqual(hashBaseRecipe("changed", resources, files), original);
   assert.notEqual(hashBaseRecipe("recipe", resources, [{ ...files[0]!, path: "renew" }]), original);
   assert.notEqual(hashBaseRecipe("recipe", resources, [{ path: "runner", bytes: Buffer.from("hello") }]), original);
@@ -45,15 +47,29 @@ test("the base recipe preserves the runner install and runtime checks", async ()
     ["pod/orbital-runner.mjs", "/opt/orbital/pod/orbital-runner.mjs", "root", "0755"],
     ["pod/renew.mjs", "/opt/orbital/pod/renew.mjs", "root", "0644"],
   ]);
+  assert.match(document.steps[0]!.args[0]!, /apt-get install -y --no-install-recommends ripgrep fd-find gh/);
   assert.deepEqual(document.steps[6]?.args, ["cd /opt/orbital && npm ci --omit=dev", "root"]);
   assert.deepEqual(document.steps.at(-1)?.args, [runtimeCheckCommand, "user"]);
-  assert.match(runtimeCheckCommand, /sudo -n true && command -v rg && command -v fd && command -v git && command -v python3 && command -v bash && test -d \/opt\/orbital\/pod && test -d \/home\/user\/\.orbital\/jobs && test -x \/usr\/local\/bin\/orbital-runner && test -w \/home\/user\/\.orbital\/jobs$/);
+  assert.match(runtimeCheckCommand, /sudo -n true && command -v rg && command -v fd && command -v git && command -v gh && command -v python3 && command -v bash && test -d \/opt\/orbital\/pod && test -d \/home\/user\/\.orbital\/jobs && test -x \/usr\/local\/bin\/orbital-runner && test -w \/home\/user\/\.orbital\/jobs$/);
+});
+
+test("resource selections change the recipe identity without changing its toolchain", async () => {
+  const defaults = await orbitalRecipe();
+  const large = await orbitalRecipe({ cpuCount: 8, memoryMB: 8192, minFreeDiskMb: 20480 });
+  assert.equal(large.cpuCount, 8);
+  assert.equal(large.memoryMB, 8192);
+  assert.equal(large.minFreeDiskMb, 20480);
+  assert.notEqual(large.sourceHash, defaults.sourceHash);
+  assert.equal(await Template.toJSON(large.template, false), await Template.toJSON(defaults.template, false));
+  await assert.rejects(orbitalRecipe({ cpuCount: 0 }), /ORBITAL_CPU_COUNT/);
+  await assert.rejects(orbitalRecipe({ memoryMB: 127 }), /ORBITAL_MEMORY_MB/);
+  await assert.rejects(orbitalRecipe({ minFreeDiskMb: -1 }), /ORBITAL_MIN_FREE_DISK_MB/);
 });
 
 test("the source hash changes with payload bytes and recipe commands", async () => {
   const directory = await mkdtemp(resolve(root, ".image-recipe-test-"));
   try {
-    for (const path of ["src/hangar/images/recipe.ts", "guest/pod/orbital-runner.mjs", "guest/pod/renew.mjs", "guest/pod/package.json", "guest/pod/package-lock.json"]) {
+    for (const path of ["src/hangar/images/recipe.ts", "src/configuration/settings.ts", "guest/pod/orbital-runner.mjs", "guest/pod/renew.mjs", "guest/pod/package.json", "guest/pod/package-lock.json"]) {
       await mkdir(resolve(directory, path, ".."), { recursive: true });
       await copyFile(resolve(root, path), resolve(directory, path));
     }

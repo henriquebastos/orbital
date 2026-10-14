@@ -20,6 +20,9 @@ import type { Images } from "../hangar/images/types.js";
 import { orbitalRecipe, runtimeCheckCommand } from "../hangar/images/recipe.js";
 import { ImageRecords, type ImageArtifact } from "../hangar/images/records.js";
 import type { E2BProviderConfig } from "./provider.js";
+import type { ImageResources } from "../configuration/settings.js";
+
+type ResourceSelection = Partial<ImageResources> | (() => Partial<ImageResources> | Promise<Partial<ImageResources>>);
 
 const SEED_LEASE_MS = 30 * 60_000;
 const SCRIPT_DEADLINE_MS = 20 * 60_000;
@@ -71,7 +74,7 @@ function statusCode(cause: unknown): number | undefined {
   return undefined;
 }
 
-export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirectory?: string }): ImageEffects {
+export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirectory?: string; resources?: ResourceSelection }): ImageEffects {
   if (!config.apiKey) throw imageError("not_started", "missing_api_key", "E2B_API_KEY is required.");
   const options = sdkOptions(config);
   const scope = scopeFor(config);
@@ -219,7 +222,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
     scope,
     available,
     external: templateArtifact,
-    recipe: orbitalRecipe,
+    recipe: async () => orbitalRecipe(typeof config.resources === "function" ? await config.resources() : config.resources),
     async findBuild(name): Promise<ImageBuild | undefined> {
       const alias = await apiGet(`/templates/aliases/${encodeURIComponent(name)}`);
       if (!alias) return undefined;
@@ -261,7 +264,8 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
       let result: Awaited<ReturnType<typeof Template.buildInBackground>>;
       try {
         result = await Template.buildInBackground(recipe.template as ReturnType<typeof Template>, name,
-          { ...options, cpuCount: recipe.cpuCount, memoryMB: recipe.memoryMB });
+          { ...options, cpuCount: recipe.cpuCount, memoryMB: recipe.memoryMB,
+            ...(recipe.minFreeDiskMb === undefined ? {} : { minFreeDiskMb: recipe.minFreeDiskMb }) });
       } catch (cause) {
         if (rejected(cause)) throw imageError("not_started", "base_build_rejected", "E2B rejected the base build.", { name, cause: (cause as Error).name });
         throw imageError("uncertain", "base_build_unknown", "The E2B base build result is unknown.",
@@ -422,7 +426,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
   };
 }
 
-export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: string }): Images {
+export function createE2BImages(config: E2BProviderConfig & { cacheDirectory: string; resources?: ResourceSelection }): Images {
   if (!config.cacheDirectory) throw imageError("not_started", "missing_cache_directory", "A cache directory is required.");
   const effects = createE2BImageEffects(config);
   const images = createImages(effects, new ImageRecords(config.cacheDirectory, effects.scope));

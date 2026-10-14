@@ -29,9 +29,9 @@ const configuration = createOrbitalConfiguration();
 const e2b = configuration.e2b();
 const orbital = createOrbital({
   provider: createE2BProvider(e2b),
-  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory }),
+  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory, resources: configuration.resources }),
 });
-await orbital.create({ orbId: "my-workspace", idleTimeoutMs: 60000 });
+await orbital.create({ orbId: "my-workspace", idleTimeoutMs: 60000, env: configuration.env(["E2B_API_KEY"]) });
 const workspace = await orbital.openWorkspace({ orbId: "my-workspace", orbCwd: "/home/user" });
 await workspace.exec({ command: "pwd" });
 ```
@@ -42,15 +42,47 @@ The Node configuration owns credential resolution, image overrides, and saved se
 const settings = configuration.settings;
 const { effective, diagnostics } = await settings.refresh();
 if (diagnostics.length) throw new Error("Repair the reported Orbital settings.");
-await orbital.create({ orbId: "my-workspace", ...effective });
+await orbital.create({ orbId: "my-workspace", ...effective,
+  env: configuration.env(effective.forwardEnv) });
 ```
 
 `configuration.e2b()` returns validated provider configuration or throws before remote work.
 `configuration.image(override?)` resolves an explicit value, environment override, or saved value, in that order.
-`settings.set(key, value)` and `settings.unset(key)` edit saved values after refresh. Unsetting does not remove environment overrides.
+`configuration.resources()` resolves `cpuCount`, `memoryMB`, and `minFreeDiskMb` for an owned image build.
+Pass those values or a resolver to `createE2BImages({ resources })`. Defaults are 2 CPUs, 1024 MiB RAM, and the provider's free-disk target.
+Environment overrides are `ORBITAL_CPU_COUNT`, `ORBITAL_MEMORY_MB`, and `ORBITAL_MIN_FREE_DISK_MB`.
+Resource changes select a different owned image for new Orbs. They do not resize existing Orbs or explicit image overrides.
+`configuration.env(names)` resolves the selected host variable names and never saves their values.
+It rejects missing variables and requires an explicitly selected, nonempty `E2B_API_KEY` for renewal.
+`forwardEnv` stores names only. `ORBITAL_FORWARD_ENV` accepts a comma-separated list, including an empty list.
+Settings precedence, from lowest to highest, is:
+
+- Global: `~/.config/orbital/settings.json`.
+- One project: `<cwd>/.orbital/settings.json` when present; otherwise `~/.config/orbital/<project-directory-name>/settings.json`.
+- Environment overrides.
+
+An absolute `XDG_CONFIG_HOME` replaces `~/.config`. Each defined list fully replaces the previous list.
+`cwd` defaults to the process startup directory and can be supplied to `createOrbitalConfiguration()`. Its final directory name selects the private project file. No ancestor directories are searched.
+Directories with the same name share a private project directory. For a checkout named `backend`, use `~/.config/orbital/backend/settings.json`.
+The selected project directory supplies all project settings and files. Repository and private directories never merge. An empty repository settings object still selects the repository directory; invalid selected settings fail without fallback.
+The default list is empty. Include `E2B_API_KEY` explicitly before creating an Orb.
+`settings.set(key, value)` and `settings.unset(key)` edit global saved values after refresh. They do not change project files. Unsetting does not remove project or environment overrides.
 Credentials are never included in saved settings or settings snapshots.
 The settings adapter does not perform Orbital operations. A CLI or another agent integration can reuse either interface independently.
 
+
+### 1a1 Instance environment
+
+Pass `env` to `orbital.create()` to set the instance environment. E2B supplies it to commands after creation and reconnect.
+The runner passes its complete environment to commands and their descendants. No variable names are reserved or filtered.
+The provider requires an explicit, nonempty `env.E2B_API_KEY` for renewal. It never copies its own API key into the instance.
+This checks presence, not validity. An invalid renewal key prevents ordinary commands from starting.
+
+The environment is separate from the image recipe, image cache, Orb metadata, and creation intent.
+Reusing an existing Orb keeps its original environment. A later `create()` call does not compare or replace those values.
+`workspace.exec({ command, env })` applies command-specific overrides without changing the instance environment.
+Those explicit overrides remain in the command's job request. Instance variables are not copied into job requests.
+Commands can read and print inherited secrets. Orbital does not mask their output.
 
 ## 1b Images
 
@@ -62,7 +94,7 @@ The package includes the build recipe and the Pod payload. Local Docker is not r
 npm run image:build
 ```
 
-The base pins Node 22.15.0 and E2B SDK 2.51.0. It includes Bash, Git, ripgrep, fd, and the command runner.
+The base pins Node 22.15.0 and E2B SDK 2.51.0. It includes Bash, Git, GitHub CLI (`gh`), ripgrep, fd, and the command runner.
 Cache expensive tools with optional Bash preparation. Check out repositories through workspace commands after Orb creation.
 See [image preparation](docs/image-preparation.md) for the API and cache lifecycle, and [the base image](docs/base-image.md) for runtime details.
 

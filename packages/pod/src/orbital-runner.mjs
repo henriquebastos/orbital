@@ -139,14 +139,7 @@ async function run() {
     await combined.close();
     return;
   }
-  const environment = {
-    PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-    HOME: process.env.HOME ?? "/home/user",
-    USER: process.env.USER ?? "user",
-    LANG: process.env.LANG ?? "C.UTF-8",
-    ...request.env,
-  };
-  delete environment.E2B_API_KEY;
+  const environment = { ...process.env, ...request.env };
 
   let renew;
   let renewalAttempts = 0;

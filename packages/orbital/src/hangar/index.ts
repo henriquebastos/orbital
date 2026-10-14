@@ -4,10 +4,12 @@ import type { ImageRequest, Images, PrepareRequest } from "./images/types.js";
 import { assertCreationMatches, creationIntent, normalizeImageRequest } from "./creation.js";
 import { Workspace } from "../workspace.js";
 import { decideDemand } from "../orb.js";
+import { validateEnvironment } from "../environment.js";
 
 export interface CreateRequest extends ImageRequest {
   orbId: string;
   idleTimeoutMs: number;
+  env?: Record<string, string>;
 }
 
 export function createOrbital(configuration: { provider: Provider; images?: Images }) {
@@ -23,7 +25,8 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
     },
     async create(request: CreateRequest, observer: Observer = {}) {
       checkCancellation(observer);
-      request = { ...request };
+      validateEnvironment(request.env);
+      request = { ...request, env: request.env === undefined ? undefined : { ...request.env } };
       requireId(request.orbId);
       if (!Number.isSafeInteger(request.idleTimeoutMs) || request.idleTimeoutMs < 3) {
         throw new OrbitalError("not_started", "invalid_create", "An integer idle timeout of at least 3 milliseconds is required.");
@@ -49,7 +52,7 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
       }
       checkCancellation(observer);
       const orb = await configuration.provider.create({ orbId: request.orbId, idleTimeoutMs: request.idleTimeoutMs,
-        image: image!, creationIntent: intent }, observer);
+        image: image!, creationIntent: intent, env: request.env }, observer);
       if (observer.signal?.aborted) {
         throw new OrbitalError("uncertain", "creation_cancelled", "Creation was admitted before cancellation. The allocation may remain.", { orbId: orb.orbId, resourceId: orb.resourceId });
       }

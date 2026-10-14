@@ -19,6 +19,37 @@ test("a caller creates an orb and executes in its selected remote directory", as
   assert.equal((await orbital.inspect({ orbId: orb.orbId }))?.resourceId, orb.resourceId);
 });
 
+test("instance environment goes only to allocation and existing orbs keep their original environment", async () => {
+  const provider = new SimulatedProvider();
+  const create = provider.create.bind(provider);
+  const environments: unknown[] = [];
+  provider.create = async request => { environments.push(request.env); return create(request); };
+  const imageRequests: unknown[] = [];
+  const orbital = createOrbital({ provider, images: { async ensure(request) {
+    imageRequests.push(request);
+    return { reference: "prepared", baseReference: "base", cacheKey: "key", reused: false };
+  } } });
+  const env = { GH_TOKEN: "instance-secret", E2B_API_KEY: "instance-key" };
+  const request = { orbId: "env-orb", idleTimeoutMs: 60000, env };
+  const creating = orbital.create(request);
+  env.GH_TOKEN = "changed-during-creation";
+  const orb = await creating;
+  assert.deepEqual(environments, [{ GH_TOKEN: "instance-secret", E2B_API_KEY: "instance-key" }]);
+  assert.doesNotMatch(JSON.stringify([orb, imageRequests]), /instance-secret|instance-key|GH_TOKEN/);
+  orb.state = "sleeping";
+  await orbital.create({ ...request, env: { GH_TOKEN: "replacement" } });
+  assert.equal(environments.length, 1);
+  assert.deepEqual(provider.effects, ["create:allocation-1", "resume:allocation-1"]);
+});
+
+test("invalid instance environment fails before provider work", async () => {
+  const orbital = createOrbital({ provider: {} as never });
+  for (const env of [null, [], { KEY: 123 }, { "a=b": "value" }, { KEY: "nul\0value" }]) {
+    await assert.rejects(orbital.create({ orbId: "env-orb", idleTimeoutMs: 60000, env: env as never }),
+      { outcome: "not_started", code: "invalid_environment" });
+  }
+});
+
 test("workspace demand wakes the same sleeping allocation without creating a replacement", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });

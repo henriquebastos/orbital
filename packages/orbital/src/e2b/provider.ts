@@ -16,6 +16,7 @@ import type { AllocationRequest, Provider } from "../provider.js";
 import type { CreationIntent, OrbSnapshot } from "../orb.js";
 import type { ExecRequest, ExecResult } from "../workspace.js";
 import { assertCreationMatches } from "../hangar/creation.js";
+import { validateEnvironment } from "../environment.js";
 
 const ORB_ID = "orbital_v2_orb_id";
 const IMAGE = "orbital_v2_image";
@@ -111,14 +112,19 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
     state: info.state === "paused" ? "sleeping" : "running",
     idleTimeoutMs,
     sandboxDomain: info.sandboxDomain,
+    resources: { cpuCount: info.cpuCount, memoryMB: info.memoryMB },
     ...(creationIntent === undefined ? {} : { creationIntent }),
   };
 }
 
 function validateCreate(request: AllocationRequest): void {
+  validateEnvironment(request.env);
   if (!request.orbId || !request.image || !Number.isSafeInteger(request.idleTimeoutMs) ||
     request.idleTimeoutMs < 3) {
     throw error("not_started", "invalid_create", "Orb ID, image, and an idle timeout of at least 3 milliseconds are required.");
+  }
+  if (!request.env?.E2B_API_KEY?.trim()) {
+    throw error("not_started", "missing_renewal_key", "The instance environment must include a nonempty E2B_API_KEY for Orb renewal.");
   }
 }
 
@@ -138,9 +144,7 @@ function validateExec(request: ExecRequest & { orbCwd: string }): void {
   if (request.timeoutMs !== undefined && (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs <= 0)) {
     throw error("not_started", "invalid_timeout", "Execution timeout must be a positive integer.");
   }
-  if (request.env && Object.hasOwn(request.env, "E2B_API_KEY")) {
-    throw error("not_started", "reserved_environment", "E2B_API_KEY cannot be passed to the command.");
-  }
+  validateEnvironment(request.env);
 }
 
 async function delay(ms: number): Promise<void> {
@@ -251,7 +255,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           [IDLE_MS]: String(request.idleTimeoutMs),
           ...(request.creationIntent === undefined ? {} : { [CREATION_INTENT]: JSON.stringify(request.creationIntent) }),
         },
-        envs: { E2B_API_KEY: config.apiKey },
+        envs: { ...request.env },
         lifecycle: { onTimeout: "pause", autoResume: true },
         network: { allowPublicTraffic: true },
       });
