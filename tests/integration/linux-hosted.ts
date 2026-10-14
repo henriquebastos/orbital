@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createE2BProvider, OrbitalError, type OrbSnapshot } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
 import { hostedConfiguration } from "../support/hosted-configuration.js";
+import { assertLinuxSuitePassed } from "../support/linux-suite.js";
 
 const { apiKey, image } = await hostedConfiguration(process.argv[2]);
 
@@ -82,7 +83,7 @@ async function main(): Promise<void> {
     const linuxSuite = await readFile(resolve("packages/pod/tests/runner.test.mjs"));
     await provider.writeFile(owned, "/tmp/orbital-runner.test.mjs", linuxSuite);
     const linuxResult = await provider.exec(owned, {
-      command: "ORBITAL_RUNNER_PATH=/opt/orbital/pod/orbital-runner.mjs node --test /tmp/orbital-runner.test.mjs",
+      command: "ORBITAL_RUNNER_PATH=/opt/orbital/pod/orbital-runner.mjs node --test --test-reporter=tap /tmp/orbital-runner.test.mjs",
       orbCwd: "/home/user",
       timeoutMs: 30_000,
     });
@@ -92,10 +93,7 @@ async function main(): Promise<void> {
     record("linux_suite", { jobId: linuxResult.jobId, kind: linuxResult.kind,
       exitCode: linuxResult.exitCode, outputPath: linuxResult.outputPath, localOutputPath,
       summary: linuxResult.stdout.split("\n").filter((line) => /^# (tests|pass|fail) /.test(line)) });
-    assert.equal(linuxResult.exitCode, 0);
-    assert.match(linuxResult.stdout, /pass 14/);
-    assert.match(linuxResult.stdout, /fail 0/);
-    assert.match(linuxResult.stdout, /skipped 0/);
+    assertLinuxSuitePassed(linuxResult);
     record("assertions_passed", { resourceId: owned.resourceId });
   } catch (cause) {
     failure = cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause);
