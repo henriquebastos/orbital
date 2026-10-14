@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
@@ -58,6 +58,32 @@ async function persistSession(session: ReturnType<typeof start>) {
   throw new Error("The fixture model did not finish.");
 }
 
+test("Pi supplies instance variables once at allocation and does not save them in session entries", async () => {
+  const provider = new SimulatedProvider();
+  provider.exec = async () => ({ kind: "exited", exitCode: 0, jobId: "directory-check",
+    stdout: "/home/user\n", stderr: "", outputPath: "/home/user/output" });
+  const environments: unknown[] = [];
+  const create = provider.create.bind(provider);
+  provider.create = async request => { environments.push(request.env); return create(request); };
+  const entries: unknown[] = [];
+  const pi = { appendEntry(_type: string, entry: unknown) { entries.push(entry); } };
+  const context = { sessionManager: {
+    getSessionId: () => "env-session", getBranch: () => [], getSessionFile: () => undefined,
+    getHeader: () => undefined, getEntries: () => [],
+  } };
+  const options = { image: "test-image", idleTimeoutMs: 60000, env: { GH_TOKEN: "instance-secret" } };
+  const session = createPiSession(pi as never, createOrbital({ provider }), async () => options);
+  await session.restore(context as never, "new");
+  session.setRoute("remote");
+  assert.deepEqual(environments, []);
+  await session.workspace();
+  options.env.GH_TOKEN = "changed";
+  await session.workspace();
+  await session.create("/home/user");
+  assert.deepEqual(environments, [{ GH_TOKEN: "instance-secret" }]);
+  assert.doesNotMatch(JSON.stringify(entries), /instance-secret|GH_TOKEN/);
+});
+
 test("a Pi session with no image setting prepares its default on first remote demand", async () => {
   const provider = new SimulatedProvider();
   provider.exec = async () => ({ kind: "exited", exitCode: 0, jobId: "directory-check",
@@ -88,6 +114,165 @@ test("a Pi session with no image setting prepares its default on first remote de
   await session.workspace();
   assert.deepEqual(provider.effects, ["create:allocation-1"]);
   assert.equal(imageRequests.length, 1);
+});
+
+test("Pi reads project preparation only for a new allocation and fails before submission on a read error", async () => {
+  const provider = new SimulatedProvider();
+  provider.exec = async () => ({ kind: "exited", exitCode: 0, jobId: "directory-check",
+    stdout: "/home/user\n", stderr: "", outputPath: "/home/user/output" });
+  const requests: unknown[] = [];
+  const entries: unknown[] = [];
+  let reads = 0;
+  let available = false;
+  let prepared = false;
+  const orbital = createOrbital({ provider, images: { async ensure(request) {
+    requests.push(request);
+    return { reference: "project-image", baseReference: "base", cacheKey: "key", reused: false };
+  } } });
+  const session = createPiSession({ appendEntry(_type: string, entry: unknown) { entries.push(entry); } } as never,
+    orbital, async () => ({ image: prepared ? "updated-base" : undefined, idleTimeoutMs: 60000, preparation: async () => {
+      reads++;
+      if (!available) throw new Error("Cannot read project files.");
+      prepared = true;
+      return "project-file-content";
+    } }));
+  await session.restore({ sessionManager: {
+    getSessionId: () => "project-session", getBranch: () => [], getSessionFile: () => undefined,
+    getHeader: () => undefined, getEntries: () => [],
+  } } as never, "new");
+  session.setRoute("remote");
+  assert.equal(reads, 0);
+  await assert.rejects(session.workspace(), /Cannot read project files/);
+  assert.equal(session.control().allocation, "neverRequested");
+  assert.deepEqual(provider.effects, []);
+  available = true;
+  await session.workspace();
+  await session.workspace();
+  await session.create("/home/user");
+  assert.equal(reads, 2);
+  assert.deepEqual(requests, [{ image: "updated-base", preparation: "project-file-content" }]);
+  assert.doesNotMatch(JSON.stringify(entries), /project-file-content/);
+});
+
+test("the agent route tool switches workspaces and retains the orb and selected directory", async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "orbital-routing-"));
+  const session = start(dir, { ORBITAL_PI_CALLS: JSON.stringify([
+    { name: "orbital", arguments: { action: "set_route", route: "remote" } },
+    { name: "bash", arguments: { command: "mkdir -p project" } },
+    { name: "orbital", arguments: { action: "select_directory", orbCwd: "/home/user/project" } },
+    { name: "write", arguments: { path: "marker", content: "REMOTE" } },
+    { name: "orbital", arguments: { action: "set_route", route: "local" } },
+    { name: "write", arguments: { path: "marker", content: "LOCAL" } },
+    { name: "orbital", arguments: { action: "set_route", route: "remote" } },
+    { name: "bash", arguments: { command: "printf AGAIN >> marker" } },
+    { name: "orbital", arguments: { action: "status" } },
+  ]), ORBITAL_PI_PROVIDER_TRACE: resolve(dir, "provider.jsonl") });
+  try {
+    await persistSession(session);
+    const response = await session.request("get_messages");
+    const results = response.data.messages.filter((message: { role: string }) => message.role === "toolResult");
+    assert.equal(results.length, 9);
+    for (const result of results) assert.equal(result.isError, false, JSON.stringify(result));
+    assert.equal(results[0].details.route, "remote");
+    assert.equal(results[0].details.allocation, "neverRequested");
+    assert.equal(results[0].details.cwd, "/home/user");
+    assert.equal(results[4].details.route, "local");
+    assert.equal(realpathSync(results[4].details.cwd), realpathSync(dir));
+    assert.equal(results[4].details.allocation, "attached");
+    assert.equal(results[4].details.orbCwd, "/home/user/project");
+    assert.equal(results[8].details.route, "remote");
+    assert.equal(results[8].details.orbCwd, "/home/user/project");
+    assert.equal(results[8].details.cwd, "/home/user/project");
+    assert.equal(readFileSync(resolve(dir, "marker"), "utf8"), "LOCAL");
+    assert.equal(readFileSync(resolve(dir, "orb/project/marker"), "utf8"), "REMOTEAGAIN");
+    assert.equal(readFileSync(resolve(dir, "provider.jsonl"), "utf8").trim().split("\n").length, 1);
+    await session.request("bash", { command: "printf USER >> marker" });
+    assert.equal(readFileSync(resolve(dir, "orb/project/marker"), "utf8"), "REMOTEAGAINUSER");
+  } finally {
+    await session.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Pi includes safe renewal diagnostics in a failed workspace tool result", async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "orbital-renewal-diagnostics-"));
+  const session = start(dir, { ORBITAL_PI_FAULT: "renewal", ORBITAL_PI_CALLS: JSON.stringify([
+    { name: "orbital", arguments: { action: "set_route", route: "remote" } },
+    { name: "bash", arguments: { command: "printf RENEWAL_PROBE" } },
+  ]) });
+  try {
+    await persistSession(session);
+    const response = await session.request("get_messages");
+    const results = response.data.messages.filter((message: { role: string }) => message.role === "toolResult");
+    assert.equal(results.at(-1).isError, true);
+    const text = results.at(-1).content.map((part: { text?: string }) => part.text ?? "").join("\n");
+    assert.match(text, /renewal_failed/);
+    assert.match(text, /"category":"timeout"/);
+    assert.match(text, /"durationMs":5004/);
+    assert.match(text, /"lastSuccessAt":"2026-09-29T03:00:29.000Z"/);
+  } finally {
+    await session.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("agent status and route selection do not contact the provider", async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "orbital-routing-"));
+  let session = start(dir, { ORBITAL_PI_FAULT: "lookup", ORBITAL_PI_CALLS: JSON.stringify([
+    { name: "orbital", arguments: { action: "status" } },
+    { name: "orbital", arguments: { action: "set_route", route: "remote" } },
+    { name: "orbital", arguments: { action: "set_route" } },
+    { name: "orbital", arguments: { action: "set_route", route: "local" } },
+  ]) });
+  try {
+    await persistSession(session);
+    const response = await session.request("get_messages");
+    const results = response.data.messages.filter((message: { role: string }) => message.role === "toolResult");
+    assert.deepEqual(results.map((result: { isError: boolean }) => result.isError), [false, false, true, false]);
+    assert.equal(results[0].details.route, "local");
+    assert.deepEqual(results[0].details.provider, { state: "unknown" });
+    assert.equal(results[1].details.route, "remote");
+    assert.match(JSON.stringify(results[2]), /route is required/);
+    assert.equal(results[3].details.route, "local");
+    assert.equal(existsSync(resolve(dir, "snapshot.json")), false);
+    await session.close();
+    session = start(dir, { ORBITAL_AUTO_ON: "true" });
+    await session.request("bash", { command: "printf LOCAL > marker" });
+    assert.equal(readFileSync(resolve(dir, "marker"), "utf8"), "LOCAL");
+    assert.equal(existsSync(resolve(dir, "snapshot.json")), false);
+  } finally {
+    await session.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the agent cannot change routing while a user shell is active", async () => {
+  const dir = mkdtempSync(resolve(tmpdir(), "orbital-routing-"));
+  const session = start(dir, { ORBITAL_PI_CALLS: JSON.stringify([
+    { name: "orbital", arguments: { action: "set_route", route: "remote" } },
+  ]) });
+  try {
+    const shell = session.request("bash", { command: "printf STARTED > started; while [ ! -f release ]; do sleep 0.01; done" });
+    for (let attempt = 0; !existsSync(resolve(dir, "started")) && attempt < 100; attempt++) {
+      await new Promise(done => setTimeout(done, 10));
+    }
+    assert.equal(existsSync(resolve(dir, "started")), true);
+    await persistSession(session);
+    const response = await session.request("get_messages");
+    const results = response.data.messages.filter((message: { role: string }) => message.role === "toolResult");
+    assert.equal(results.length, 1);
+    assert.equal(results[0].isError, true);
+    assert.match(JSON.stringify(results[0]), /Orbital is busy/);
+    writeFileSync(resolve(dir, "release"), "");
+    await shell;
+    await session.request("bash", { command: "printf LOCAL > marker" });
+    assert.equal(readFileSync(resolve(dir, "marker"), "utf8"), "LOCAL");
+    assert.equal(existsSync(resolve(dir, "snapshot.json")), false);
+  } finally {
+    writeFileSync(resolve(dir, "release"), "");
+    await session.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("on saves remote intent without allocation, first demand allocates, and off preserves the orb", async () => {

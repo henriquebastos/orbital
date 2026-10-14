@@ -40,10 +40,17 @@ export function createPiSession(pi: ExtensionAPI, orbital: PiOrbitalApi,
       if (explicitDirectory === undefined && current.allocation !== "neverRequested") {
         throw new OrbitalError("not_started", "missing", "The previously requested orb is missing. Create it explicitly.");
       }
-      const options = await getOptions();
+      let options = await getOptions();
       if (options.creationProblem) throw new OrbitalError("not_started", "configuration", options.creationProblem);
+      const preparation = await options.preparation?.();
+      if (options.preparation) {
+        // Use the settings refreshed while reading the project files.
+        options = await getOptions();
+        if (options.creationProblem) throw new OrbitalError("not_started", "configuration", options.creationProblem);
+      }
       save({ ...current, route: "remote", allocation: "requested" });
-      const orb = await orbital.create({ orbId: id, image: options.image, idleTimeoutMs: options.idleTimeoutMs }, { signal });
+      const orb = await orbital.create({ orbId: id, image: options.image, preparation, idleTimeoutMs: options.idleTimeoutMs,
+        env: options.env }, { signal });
       if (orb.orbId !== id) throw new Error("Orbital returned an unexpected orb ID.");
     }
     const workspace = await orbital.openWorkspace({ orbId: id, orbCwd: "/home/user" }, { signal });

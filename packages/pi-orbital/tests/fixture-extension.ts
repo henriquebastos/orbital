@@ -41,6 +41,12 @@ export default function fixtureExtension(pi: ExtensionAPI): void {
     url(orb, port) { return `https://${orb.resourceId}.fixture.invalid:${port}`; },
     async exec(_orb, request, observer) {
       const jobId = randomUUID();
+      if (process.env.ORBITAL_PI_FAULT === "renewal" && request.command.includes("RENEWAL_PROBE")) {
+        throw new OrbitalError("uncertain", "renewal_failed", "The remote runner failed.", {
+          jobId, renewal: { category: "timeout", durationMs: 5004, attempt: 8,
+            lastSuccessAt: "2026-09-29T03:00:29.000Z" },
+        });
+      }
       const run = spawnSync("/bin/bash", ["-c", request.command.replaceAll("/home/user", orbRoot)], {
         cwd: localPath(request.orbCwd), encoding: "utf8",
         env: { PATH: process.env.PATH, HOME: orbRoot, ...request.env }, timeout: request.timeoutMs,

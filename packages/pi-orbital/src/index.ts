@@ -23,11 +23,14 @@ export default function orbitalExtension(pi: ExtensionAPI): void {
   try {
     const e2b = orbitalConfiguration.e2b();
     provider = createE2BProvider(e2b);
-    images = createE2BImages({ ...e2b, cacheDirectory: orbitalConfiguration.cacheDirectory });
+    images = createE2BImages({ ...e2b, cacheDirectory: orbitalConfiguration.cacheDirectory,
+      resources: () => configuration.options() });
   } catch (cause) {
     problem = cause instanceof Error ? cause.message : "Remote configuration is unavailable.";
     provider = unavailableProvider(problem);
   }
-  const configuration = createPiConfiguration(pi, problem, orbitalConfiguration.settings);
-  registerOrbitalPi(pi, createOrbital({ provider, images }), configuration.options, configuration.command);
+  const configuration = createPiConfiguration(pi, problem, orbitalConfiguration.settings, orbitalConfiguration.env);
+  registerOrbitalPi(pi, createOrbital({ provider, images }), async () => ({
+    ...await configuration.options(), preparation: orbitalConfiguration.preparation,
+  }), configuration);
 }
