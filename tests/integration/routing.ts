@@ -30,12 +30,12 @@ let cleanup: Record<string, unknown> = {};
 const started = Date.now();
 mkdirSync(receiptDirectory, { recursive: true });
 mkdirSync(configDirectory, { recursive: true });
-writeFileSync(resolve(configDirectory, "settings.json"), JSON.stringify({ image, idleTimeoutMs: 30000 }) + "\n");
+writeFileSync(resolve(configDirectory, "settings.json"), JSON.stringify({ image, leaseWindowMs: 30000 }) + "\n");
 writeFileSync(resolve(configDirectory, "pi.json"), JSON.stringify({ autoOn: false, skillRoots: [] }) + "\n");
 const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
   XDG_CONFIG_HOME: resolve(directory, "config"), ORBITAL_AUTO_ON: "false", ORBITAL_FORWARD_ENV: "E2B_API_KEY" };
 delete env.ORBITAL_IMAGE;
-delete env.ORBITAL_IDLE_TIMEOUT_MS;
+delete env.ORBITAL_LEASE_WINDOW_MS;
 
 function checkpoint(): void {
   writeFileSync(resolve(receiptDirectory, "progress.json"), JSON.stringify({ image, orbId, resourceId, runs }, null, 2) + "\n");
@@ -138,7 +138,7 @@ try {
     assert.ok(created);
     resourceId = created.resourceId;
     assert.equal(created.image, image);
-    assert.equal(created.idleTimeoutMs, 30000);
+    assert.equal(created.leaseWindowMs, 30000);
     checkpoint();
     assert.deepEqual(bindingRecords().at(-1), { version: 1, route: "remote", allocation: "attached", orbCwd: "/home/user" });
 
@@ -150,13 +150,13 @@ try {
     assert.equal((await orbital.inspect({ orbId: orbId! }))?.resourceId, resourceId);
 
     await pi.request("prompt", "/orb settings set image changed-image-for-reuse-test");
-    await pi.request("prompt", "/orb settings set idleTimeoutMs 60000");
+    await pi.request("prompt", "/orb settings set leaseWindowMs 60000");
     assert.deepEqual(JSON.parse(readFileSync(resolve(configDirectory, "settings.json"), "utf8")),
-      { image: "changed-image-for-reuse-test", idleTimeoutMs: 60000 });
+      { image: "changed-image-for-reuse-test", leaseWindowMs: 60000 });
     const retained = await orbital.inspect({ orbId: orbId! });
     assert.equal(retained?.resourceId, resourceId);
     assert.equal(retained.image, image);
-    assert.equal(retained.idleTimeoutMs, 30000);
+    assert.equal(retained.leaseWindowMs, 30000);
   } finally { await pi.stop(); }
 
   pi = startPi();
@@ -175,7 +175,7 @@ try {
     const same = await orbital.inspect({ orbId: orbId! });
     assert.equal(same?.resourceId, resourceId);
     assert.equal(same.image, image);
-    assert.equal(same.idleTimeoutMs, 30000);
+    assert.equal(same.leaseWindowMs, 30000);
     assert.equal(readFileSync(resolve(directory, "marker"), "utf8"), "LOCAL_AFTER_OFF");
   } finally { await pi.stop(); }
   assert.equal(readFileSync(session, "utf8").includes(apiKey), false);

@@ -16,7 +16,7 @@ function fixture() {
       cwd: directory, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
         XDG_CONFIG_HOME: resolve(directory, "config"), E2B_API_KEY: "", ORBITAL_IMAGE: undefined,
-        ORBITAL_IDLE_TIMEOUT_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
+        ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
         ORBITAL_FORWARD_ENV: undefined, ...overrides },
     });
     assert.equal(run.status, 0, run.stderr);
@@ -33,7 +33,7 @@ function fixture() {
       "--provider", "orbital-fixture", "--model", "probe", "--mode", "json", "--no-session", "--print", "run fixture"], {
       cwd: directory, encoding: "utf8", timeout: 30_000,
       env: { ...process.env, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false", ORBITAL_IMAGE: undefined,
-        ORBITAL_IDLE_TIMEOUT_MS: undefined, ORBITAL_SKILL_ROOTS: undefined, ORBITAL_FORWARD_ENV: undefined,
+        ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_SKILL_ROOTS: undefined, ORBITAL_FORWARD_ENV: undefined,
         XDG_CONFIG_HOME: resolve(directory, "config"), PI_CODING_AGENT_DIR: resolve(directory, "agent"),
         ORBITAL_PI_CALLS: JSON.stringify(calls), ...overrides },
     });
@@ -49,7 +49,7 @@ function fixture() {
 test("the orbital tool edits every setting with the same results as slash commands", () => {
   const f = fixture();
   try {
-    const values = { image: "saved-image", idleTimeoutMs: 45000, forwardEnv: ["GH_TOKEN", "E2B_API_KEY"],
+    const values = { image: "saved-image", leaseWindowMs: 45000, forwardEnv: ["GH_TOKEN", "E2B_API_KEY"],
       autoOn: true, skillRoots: ["/skills/two  spaces"] };
     const results = f.tools([
       ...Object.entries(values).map(([name, value]) => ({ name: "orbital", arguments: { action: "settings_set", name, value } })),
@@ -60,7 +60,7 @@ test("the orbital tool edits every setting with the same results as slash comman
     const details = results[5].result.details;
     const command = f.command("/orb settings", { ORBITAL_AUTO_ON: "false" });
     assert.deepEqual(details, command.details);
-    assert.deepEqual(details.settings.saved, { image: values.image, idleTimeoutMs: values.idleTimeoutMs, forwardEnv: values.forwardEnv });
+    assert.deepEqual(details.settings.saved, { image: values.image, leaseWindowMs: values.leaseWindowMs, forwardEnv: values.forwardEnv });
     assert.deepEqual(details.preferences.saved, { autoOn: true, skillRoots: values.skillRoots });
     assert.equal(results[6].result.details.route, "local", "Settings changes must not change the current route.");
     assert.equal(results[6].result.details.allocation, "neverRequested");
@@ -192,7 +192,7 @@ test("invalid tool settings fail without changing saved values", () => {
       { action: "settings_unset" },
       { action: "settings_set", name: "image" },
       { action: "settings_set", name: "image", value: false },
-      { action: "settings_set", name: "idleTimeoutMs", value: 2 },
+      { action: "settings_set", name: "leaseWindowMs", value: 2 },
       { action: "settings_set", name: "autoOn", value: "true" },
       { action: "settings_set", name: "skillRoots", value: ["relative"] },
       { action: "settings_set", name: "forwardEnv", value: ["GH_TOKEN=do-not-echo"] },
@@ -222,7 +222,7 @@ test("Pi status validates instance variables without exposing their values", () 
     const status = f.command("/orb status", overrides, "orbital.status");
     assert.equal(status.details.readiness.create, true);
     assert.doesNotMatch(JSON.stringify(status), /instance-secret/);
-    const settings = f.command("/orb settings set idleTimeoutMs 90000", overrides);
+    const settings = f.command("/orb settings set leaseWindowMs 90000", overrides);
     assert.doesNotMatch(JSON.stringify(settings), /instance-secret|test-key/);
     assert.doesNotMatch(readFileSync(resolve(f.config, "settings.json"), "utf8"), /instance-secret|GH_TOKEN/);
     for (const forwardEnv of ["GH_TOKEN", "E2B_API_KEY,MISSING", "", "a,,b"]) {
@@ -260,10 +260,10 @@ test("Pi edits global forwarding while showing project and environment replaceme
 test("Pi saves an Orbital default separately from its environment override", () => {
   const f = fixture();
   try {
-    writeFileSync(resolve(f.config, "settings.json"), JSON.stringify({ idleTimeoutMs: 90000 }));
+    writeFileSync(resolve(f.config, "settings.json"), JSON.stringify({ leaseWindowMs: 90000 }));
     const message = f.command("/orb settings set image saved-image", { ORBITAL_IMAGE: "environment-image" });
     assert.deepEqual(JSON.parse(readFileSync(resolve(f.config, "settings.json"), "utf8")), {
-      idleTimeoutMs: 90000, image: "saved-image",
+      leaseWindowMs: 90000, image: "saved-image",
     });
     assert.equal(message.details.settings.saved.image, "saved-image");
     assert.equal(message.details.settings.effective.image, "environment-image");
@@ -323,9 +323,9 @@ test("Pi unsets a saved value without deleting its environment override or other
   const f = fixture();
   try {
     f.command("/orb settings set image saved-image");
-    f.command("/orb settings set idleTimeoutMs 45000");
+    f.command("/orb settings set leaseWindowMs 45000");
     const message = f.command("/orb settings unset image", { ORBITAL_IMAGE: "override-image" });
-    assert.deepEqual(JSON.parse(readFileSync(resolve(f.config, "settings.json"), "utf8")), { idleTimeoutMs: 45000 });
+    assert.deepEqual(JSON.parse(readFileSync(resolve(f.config, "settings.json"), "utf8")), { leaseWindowMs: 45000 });
     assert.equal(message.details.settings.effective.image, "override-image");
     assert.equal(message.details.settings.source.image, "environment");
   } finally { f.close(); }
@@ -337,7 +337,7 @@ test("Pi refresh reads external settings changes without starting a model turn",
     "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
     "--extension", resolve("packages/pi-orbital/src/index.ts"), "--mode", "rpc", "--no-session"], {
     cwd: f.directory, env: { ...process.env, E2B_API_KEY: "", ORBITAL_IMAGE: undefined,
-      ORBITAL_IDLE_TIMEOUT_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
+      ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
       XDG_CONFIG_HOME: resolve(f.directory, "config"), PI_CODING_AGENT_DIR: resolve(f.directory, "agent") },
   });
   const events: any[] = [];
@@ -407,7 +407,7 @@ test("Pi print mode shows settings on its diagnostic stream without a TUI or a m
     });
     assert.equal(run.status, 0, run.stderr);
     assert.match(run.stderr, /Orbital settings:/);
-    assert.match(run.stderr, /idleTimeoutMs/);
+    assert.match(run.stderr, /leaseWindowMs/);
   } finally { f.close(); }
 });
 

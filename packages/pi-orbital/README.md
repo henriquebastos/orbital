@@ -68,6 +68,7 @@ A shell command's `cd` does not change the selected directory.
 Ordinary Bash commands renew the orb while they run, even after Pi exits.
 An optional `timeout` uses seconds and stops the managed processes remotely.
 Use `mode: "background"` for a service. The service survives Pi exit and does not prevent automatic sleep.
+The runner keeps capturing the service's output to the job files after the launching shell exits.
 Use distinct ports for distinct services. The application controls any authentication it needs.
 
 Resume the same Pi session file to restore its orb and directory:
@@ -142,7 +143,7 @@ Settings commands edit global defaults only. Edit project files directly, then u
 | Setting | Default | Environment override | Applies to |
 | --- | --- | --- | --- |
 | `image` | Unset: prepare Orbital base | `ORBITAL_IMAGE` | Next allocation |
-| `idleTimeoutMs` | `60000` | `ORBITAL_IDLE_TIMEOUT_MS` | Next allocation |
+| `leaseWindowMs` | `60000` | `ORBITAL_LEASE_WINDOW_MS` | Next allocation |
 | `cpuCount` | `2` | `ORBITAL_CPU_COUNT` | Owned image for a new orb |
 | `memoryMB` | `1024` | `ORBITAL_MEMORY_MB` | Owned image for a new orb |
 | `minFreeDiskMb` | E2B team default | `ORBITAL_MIN_FREE_DISK_MB` | Owned image for a new orb |
@@ -159,7 +160,7 @@ Use Pi commands to inspect or change settings:
 ```text
 /orb settings
 /orb settings set image my-template
-/orb settings set idleTimeoutMs 90000
+/orb settings set leaseWindowMs 90000
 /orb settings set cpuCount 8
 /orb settings set memoryMB 8192
 /orb settings set minFreeDiskMb 20480
@@ -209,7 +210,7 @@ Processes that deliberately create another session or process group can escape t
 Explicit cancellation and timeout report uncertainty if termination cannot be confirmed.
 Transport loss does not cancel or replay a command. Full output remains in the orb.
 
-The default idle timeout is 60 seconds. Set `ORBITAL_IDLE_TIMEOUT_MS` to change the timeout for new orbs.
+The default lease window is 60 seconds. Set `ORBITAL_LEASE_WINDOW_MS` to change the window for new orbs.
 Each existing orb keeps its original timeout for command renewal.
 Native E2B HTTP wake can impose a five-minute lease. HTTP connections can need reconnection after sleep.
 Background process existence does not protect HTTP work from sleep.

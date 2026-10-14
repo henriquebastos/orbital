@@ -57,11 +57,12 @@ export async function renew() {
   await mkdir(job);
   await writeFile(join(job, "request.json"), JSON.stringify({
     version: 1,
-    idleTimeoutMs: 300,
+    leaseWindowMs: 300,
     ...request,
     command: typeof request.command === "function" ? request.command(root) : request.command,
   }));
   if (options.stdoutToFull) await symlink("/dev/full", join(job, "stdout"));
+  if (options.staleOutput) await writeFile(join(job, "stdout"), "stale");
   if (options.preCancel) await writeFile(join(job, "cancel"), "");
   const child = spawn(process.execPath, [runner, "run", id], {
     detached: true,
@@ -74,7 +75,7 @@ export async function renew() {
       ORBITAL_JOBS_DIR: root,
       ORBITAL_RENEW_MODULE: pathToFileURL(renewalModule).href,
       ORBITAL_RENEW_LOG: join(root, "renewals"),
-      ORBITAL_RENEW_INTERVAL_MS: "70",
+      ORBITAL_RENEW_INTERVAL_MS: options.renewInterval ?? "70",
       ...(options.failRenewAfter === undefined ? {} : { ORBITAL_FAIL_RENEW_AFTER: String(options.failRenewAfter) }),
       ...(options.renewalFailure === undefined ? {} : { ORBITAL_RENEW_FAILURE: JSON.stringify(options.renewalFailure) }),
       ORBITAL_RENEW_FAILURE_DELAY_MS: String(options.renewalFailureDelayMs ?? 0),
@@ -98,6 +99,148 @@ export async function renew() {
   return { id, job, root, child };
 }
 
+const finishedReceiptKeys = ["state", "jobId", "mode", "pid", "pgid", "outcome", "scopeStopped",
+  "exitCode", "signal", "phase", "errorCode", "error", "renewal"];
+
+test("every finished receipt has one shape, with null for unknown fields", async (t) => {
+  const exited = await launch(t, { mode: "ordinary", command: "exit 3", cwd: "/tmp", sandboxId: "sandbox-test" });
+  const cancelled = await launch(t, { mode: "ordinary", command: "printf unexpected", cwd: "/tmp", sandboxId: "sandbox-test" }, { preCancel: true });
+  const denied = await launch(t, { mode: "ordinary", command: "printf unexpected", cwd: "/tmp", sandboxId: "sandbox-test" }, { failRenewAfter: 0 });
+  const receipts = {};
+  for (const [name, { job }] of Object.entries({ exited, cancelled, denied })) {
+    receipts[name] = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+    assert.deepEqual(Object.keys(receipts[name]), finishedReceiptKeys, name);
+  }
+  assert.equal(receipts.exited.outcome, "exited");
+  assert.equal(receipts.exited.exitCode, 3);
+  assert.equal(receipts.exited.signal, null);
+  assert.equal(receipts.exited.phase, "execution");
+  assert.equal(receipts.exited.errorCode, null);
+  assert.equal(receipts.exited.renewal, null);
+  assert.equal(receipts.cancelled.pid, null);
+  assert.equal(receipts.cancelled.phase, "pre_execution");
+  assert.equal(receipts.cancelled.mode, "ordinary");
+  assert.equal(receipts.denied.phase, "pre_execution");
+  assert.equal(receipts.denied.errorCode, "renewal_failed");
+  assert.equal(receipts.denied.pid, null);
+});
+
+test("an active renewal failure reports the execution phase", async (t) => {
+  const { job } = await launch(t, {
+    mode: "ordinary", command: "sleep 10", cwd: "/tmp", sandboxId: "sandbox-test",
+  }, { failRenewAfter: 1 });
+  const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+  assert.equal(status.errorCode, "renewal_failed");
+  assert.equal(status.phase, "execution");
+  assert.equal(typeof status.pid, "number");
+});
+
+test("background completion reports surviving descendants and does not wait for their pipes", async (t) => {
+  const begin = Date.now();
+  const { job } = await launch(t, {
+    mode: "background",
+    command: "sleep 4 & printf started",
+    cwd: "/tmp",
+    sandboxId: "sandbox-test",
+  });
+  const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished", 3000);
+  assert.ok(Date.now() - begin < 3000, "the receipt must not wait for the daemon's pipe");
+  assert.equal(status.outcome, "exited", JSON.stringify(status));
+  assert.equal(status.exitCode, 0);
+  assert.equal(status.scopeStopped, false);
+  assert.equal(await readFile(join(job, "stdout"), "utf8"), "started");
+});
+
+test("cancel stops a surviving background service after the shell finished", async (t) => {
+  const { id, job, root } = await launch(t, {
+    mode: "background",
+    command: (root) => `bash -c 'while [ ! -f ${join(root, "release")} ]; do sleep .05; done; touch ${join(root, "late-marker")}' & printf started`,
+    cwd: "/tmp",
+    sandboxId: "sandbox-test",
+  });
+  const finished = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished", 3000);
+  assert.equal(finished.outcome, "exited");
+  assert.equal(finished.scopeStopped, false);
+  const cancel = spawn(process.execPath, [runner, "cancel", id], { env: { ...process.env, ORBITAL_JOBS_DIR: root } });
+  assert.equal(await new Promise((resolveCancel) => cancel.once("exit", resolveCancel)), 0);
+  const stopped = JSON.parse(await readFile(join(job, "status.json"), "utf8"));
+  assert.deepEqual(stopped, { ...finished, scopeStopped: true });
+  await assert.rejects(readFile(join(job, "cancel")), { code: "ENOENT" });
+  await writeFile(join(root, "release"), "");
+  await new Promise((resolveWait) => setTimeout(resolveWait, 200));
+  await assert.rejects(readFile(join(root, "late-marker")), { code: "ENOENT" });
+});
+
+test("cancellation interrupts a stalled preflight renewal before the command starts", async (t) => {
+  const { id, job, root } = await launch(t, {
+    mode: "ordinary",
+    command: (root) => `touch ${join(root, "unexpected")}`,
+    cwd: "/tmp",
+    sandboxId: "sandbox-test",
+  }, { stallRenewAfter: 0 });
+  await waitForRenewals(root, 1);
+  const cancel = spawn(process.execPath, [runner, "cancel", id], {
+    env: { ...process.env, ORBITAL_JOBS_DIR: root },
+  });
+  assert.equal(await new Promise((resolveCancel) => cancel.once("exit", resolveCancel)), 0);
+  const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished", 1500);
+  assert.equal(status.outcome, "cancelled", JSON.stringify(status));
+  assert.equal(status.phase, "pre_execution");
+  assert.equal(status.scopeStopped, true);
+  await assert.rejects(readFile(join(root, "unexpected")), { code: "ENOENT" });
+});
+
+test("an invalid request publishes a failed receipt with null context", async (t) => {
+  const { job } = await launch(t, { mode: "sideways", command: "printf unexpected", cwd: "/tmp", sandboxId: "sandbox-test" });
+  const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+  assert.deepEqual(Object.keys(status), finishedReceiptKeys);
+  assert.equal(status.outcome, "failed");
+  assert.equal(status.phase, "pre_execution");
+  assert.equal(status.mode, null);
+  assert.equal(status.error, "Invalid job request.");
+});
+
+test("a cancellation marker before launch leaves existing output files untouched", async (t) => {
+  const { job } = await launch(t, { mode: "ordinary", command: "printf unexpected", cwd: "/tmp", sandboxId: "sandbox-test" },
+    { preCancel: true, staleOutput: true });
+  const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+  assert.equal(status.outcome, "cancelled");
+  assert.equal(await readFile(join(job, "stdout"), "utf8"), "stale");
+  await assert.rejects(readFile(join(job, "combined")), { code: "ENOENT" });
+});
+
+test("a second run refuses a job that already has a receipt and keeps its output", async (t) => {
+  const { id, job, root } = await launch(t, {
+    mode: "ordinary", command: "printf once", cwd: "/tmp", sandboxId: "sandbox-test",
+  });
+  const first = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+  const again = spawn(process.execPath, [runner, "run", id], {
+    env: { PATH: process.env.PATH, HOME: root, ORBITAL_JOBS_DIR: root, E2B_API_KEY: "test-key" },
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+  let stderr = "";
+  again.stderr.on("data", (chunk) => { stderr += chunk; });
+  assert.equal(await new Promise((resolveExit) => again.once("exit", resolveExit)), 1);
+  assert.match(stderr, /already has a receipt/);
+  assert.deepEqual(JSON.parse(await readFile(join(job, "status.json"), "utf8")), first);
+  assert.equal(await readFile(join(job, "stdout"), "utf8"), "once");
+});
+
+test("an invalid renewal interval override falls back to the lease cap", async (t) => {
+  const { job, root } = await launch(t, {
+    mode: "ordinary",
+    command: (root) => `while [ ! -f ${join(root, "release")} ]; do sleep .05; done`,
+    cwd: "/tmp",
+    sandboxId: "sandbox-test",
+  }, { renewInterval: "not-a-number" });
+  await waitForStatus(join(job, "status.json"), (value) => value.state === "started");
+  await new Promise((resolveWait) => setTimeout(resolveWait, 280));
+  const during = (await readFile(join(root, "renewals"), "utf8")).trim().split("\n").length;
+  assert.ok(during >= 3 && during <= 5, `renewals with an invalid override: ${during}`);
+  await writeFile(join(root, "release"), "");
+  await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
+});
+
 test("background job starts and keeps a durable output and exit receipt", async (t) => {
   const { job } = await launch(t, {
     mode: "background",
@@ -106,7 +249,7 @@ test("background job starts and keeps a durable output and exit receipt", async 
     sandboxId: "sandbox-test",
   });
   const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
-  assert.equal(status.outcome, "completed");
+  assert.equal(status.outcome, "exited");
   assert.equal(status.exitCode, 0);
   assert.equal(await readFile(join(job, "stdout"), "utf8"), "hello");
   assert.equal(await readFile(join(job, "stderr"), "utf8"), "warning");
@@ -193,7 +336,7 @@ test("ordinary completion stops orphaned descendants in its process group", asyn
     sandboxId: "sandbox-test",
   });
   const status = await waitForStatus(join(job, "status.json"), (value) => value.state === "finished");
-  assert.equal(status.outcome, "completed", JSON.stringify(status));
+  assert.equal(status.outcome, "exited", JSON.stringify(status));
   assert.equal(status.scopeStopped, true);
   await writeFile(join(root, "release"), "");
   await new Promise((resolveWait) => setTimeout(resolveWait, 200));

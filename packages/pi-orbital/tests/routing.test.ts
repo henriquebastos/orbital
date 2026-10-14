@@ -71,7 +71,7 @@ test("Pi supplies instance variables once at allocation and does not save them i
     getSessionId: () => "env-session", getBranch: () => [], getSessionFile: () => undefined,
     getHeader: () => undefined, getEntries: () => [],
   } };
-  const options = { image: "test-image", idleTimeoutMs: 60000, env: { GH_TOKEN: "instance-secret" } };
+  const options = { image: "test-image", leaseWindowMs: 60000, env: { GH_TOKEN: "instance-secret" } };
   const session = createPiSession(pi as never, createOrbital({ provider }), async () => options);
   await session.restore(context as never, "new");
   session.setRoute("remote");
@@ -101,7 +101,7 @@ test("a Pi session with no image setting prepares its default on first remote de
     getSessionId: () => "pi-session", getBranch: () => [], getSessionFile: () => undefined,
     getHeader: () => undefined, getEntries: () => [],
   } };
-  const session = createPiSession(pi as never, orbital, async () => ({ image: undefined, idleTimeoutMs: 60_000 }));
+  const session = createPiSession(pi as never, orbital, async () => ({ image: undefined, leaseWindowMs: 60_000 }));
   await session.restore(context as never, "new");
   session.setRoute("remote");
   assert.deepEqual(provider.effects, []);
@@ -130,7 +130,7 @@ test("Pi reads project preparation only for a new allocation and fails before su
     return { reference: "project-image", baseReference: "base", cacheKey: "key", reused: false };
   } } });
   const session = createPiSession({ appendEntry(_type: string, entry: unknown) { entries.push(entry); } } as never,
-    orbital, async () => ({ image: prepared ? "updated-base" : undefined, idleTimeoutMs: 60000, preparation: async () => {
+    orbital, async () => ({ image: prepared ? "updated-base" : undefined, leaseWindowMs: 60000, preparation: async () => {
       reads++;
       if (!available) throw new Error("Cannot read project files.");
       prepared = true;

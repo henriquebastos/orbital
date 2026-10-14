@@ -19,6 +19,14 @@ The image exposes `orbital-runner` as a command. Jobs save their files under `/h
 
 Ordinary commands renew the Orb while they run. Background services do not renew the Orb.
 Cancellation and timeout stop the managed process group. Transport loss does not cancel or replay work.
+Cancellation also interrupts the first renewal of an ordinary job, so a cancelled job never starts its command.
+A job runs once. A second `run` for a job that already has a receipt exits with status 1 and changes nothing.
+
+Every finished receipt has the same fields: `jobId`, `mode`, `pid`, `pgid`, `outcome`, `scopeStopped`, `exitCode`, `signal`, `phase`, `errorCode`, `error`, and `renewal`.
+A field is `null` when its value is unknown. `outcome: "exited"` means the shell exited on its own, with any exit code.
+After an ordinary shell exits, the runner stops surviving members of its process group.
+After a background shell exits, the runner only observes the group: `scopeStopped` is `false` while the service runs. `orbital-runner cancel` on such a finished job stops the service and updates the receipt.
+The finished receipt waits at most one second for the output pipes. Capture continues after the receipt until the pipes close.
 
 A renewal failure still stops the managed process group. The five-second request timeout and renewal schedule are unchanged.
 Renewal failure records include `renewal`: an allowlisted error category, a valid HTTP status when available, attempt count, duration in milliseconds, and the last successful renewal timestamp.

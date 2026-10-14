@@ -7,7 +7,7 @@ import { createNodeSettings, createOrbitalConfiguration } from "@henriquebastosn
 
 interface PiPreferences { autoOn: boolean; skillRoots: string[] }
 
-export const settingNameSchema = Type.Union([Type.Literal("image"), Type.Literal("idleTimeoutMs"),
+export const settingNameSchema = Type.Union([Type.Literal("image"), Type.Literal("leaseWindowMs"),
   Type.Literal("forwardEnv"), Type.Literal("autoOn"), Type.Literal("skillRoots"),
   Type.Literal("cpuCount"), Type.Literal("memoryMB"), Type.Literal("minFreeDiskMb")],
   { description: "Required for settings_set and settings_unset." });
@@ -21,14 +21,14 @@ function parseCommand(args: string): SettingsAction {
   const input = args.trim();
   if (input === "refresh") return { action: "settings_refresh" };
   if (input === "" || input === "show") return { action: "settings_get" };
-  const unset = /^unset\s+(image|idleTimeoutMs|forwardEnv|autoOn|skillRoots|cpuCount|memoryMB|minFreeDiskMb)$/.exec(input);
+  const unset = /^unset\s+(image|leaseWindowMs|forwardEnv|autoOn|skillRoots|cpuCount|memoryMB|minFreeDiskMb)$/.exec(input);
   if (unset) return { action: "settings_unset", name: unset[1] as SettingName };
-  const match = /^set\s+(image|idleTimeoutMs|forwardEnv|autoOn|skillRoots|cpuCount|memoryMB|minFreeDiskMb)\s+([\s\S]+)$/.exec(input);
+  const match = /^set\s+(image|leaseWindowMs|forwardEnv|autoOn|skillRoots|cpuCount|memoryMB|minFreeDiskMb)\s+([\s\S]+)$/.exec(input);
   if (!match) throw new Error("Use /orb settings set <key> <value> or unset <key>.");
   const name = match[1] as SettingName;
   const text = match[2]!;
   if (name === "image") return { action: "settings_set", name, value: text };
-  if (name === "idleTimeoutMs" || name === "cpuCount" || name === "memoryMB" || name === "minFreeDiskMb") {
+  if (name === "leaseWindowMs" || name === "cpuCount" || name === "memoryMB" || name === "minFreeDiskMb") {
     return { action: "settings_set", name, value: orbitalSettingsSchema[name].parseEnvironment(text) };
   }
   if (name === "autoOn") return { action: "settings_set", name, value: piPreferencesSchema.autoOn.parseEnvironment(text) };
@@ -97,7 +97,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
       else await settings.unset(action.name);
     } else if (action.action === "settings_set") {
       if (action.name === "image") await settings.set("image", orbitalSettingsSchema.image.parseSaved(action.value));
-      else if (action.name === "idleTimeoutMs") await settings.set("idleTimeoutMs", orbitalSettingsSchema.idleTimeoutMs.parseSaved(action.value));
+      else if (action.name === "leaseWindowMs") await settings.set("leaseWindowMs", orbitalSettingsSchema.leaseWindowMs.parseSaved(action.value));
       else if (action.name === "forwardEnv") await settings.set("forwardEnv", orbitalSettingsSchema.forwardEnv.parseSaved(action.value));
       else if (action.name === "cpuCount") await settings.set("cpuCount", orbitalSettingsSchema.cpuCount.parseSaved(action.value));
       else if (action.name === "memoryMB") await settings.set("memoryMB", orbitalSettingsSchema.memoryMB.parseSaved(action.value));

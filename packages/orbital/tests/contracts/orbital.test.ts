@@ -5,13 +5,13 @@ import { SimulatedProvider } from "../../../../tests/support/provider.js";
 
 test("creation requires an explicit orb ID before contacting the provider", async () => {
   const orbital = createOrbital({ provider: {} as never });
-  await assert.rejects(orbital.create({ orbId: "", image: "test-image", idleTimeoutMs: 60000 }), /orbId/);
+  await assert.rejects(orbital.create({ orbId: "", image: "test-image", leaseWindowMs: 60000 }), /orbId/);
 });
 
 test("a caller creates an orb and executes in its selected remote directory", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: orb.orbId, orbCwd: "/home/user" });
   const result = await workspace.exec({ command: "pwd" });
   assert.equal(result.stdout, "/home/user");
@@ -30,7 +30,7 @@ test("instance environment goes only to allocation and existing orbs keep their 
     return { reference: "prepared", baseReference: "base", cacheKey: "key", reused: false };
   } } });
   const env = { GH_TOKEN: "instance-secret", E2B_API_KEY: "instance-key" };
-  const request = { orbId: "env-orb", idleTimeoutMs: 60000, env };
+  const request = { orbId: "env-orb", leaseWindowMs: 60000, env };
   const creating = orbital.create(request);
   env.GH_TOKEN = "changed-during-creation";
   const orb = await creating;
@@ -45,7 +45,7 @@ test("instance environment goes only to allocation and existing orbs keep their 
 test("invalid instance environment fails before provider work", async () => {
   const orbital = createOrbital({ provider: {} as never });
   for (const env of [null, [], { KEY: 123 }, { "a=b": "value" }, { KEY: "nul\0value" }]) {
-    await assert.rejects(orbital.create({ orbId: "env-orb", idleTimeoutMs: 60000, env: env as never }),
+    await assert.rejects(orbital.create({ orbId: "env-orb", leaseWindowMs: 60000, env: env as never }),
       { outcome: "not_started", code: "invalid_environment" });
   }
 });
@@ -53,7 +53,7 @@ test("invalid instance environment fails before provider work", async () => {
 test("workspace demand wakes the same sleeping allocation without creating a replacement", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   orb.state = "sleeping";
   const workspace = await orbital.openWorkspace({ orbId: orb.orbId, orbCwd: "/home/user" });
   await workspace.exec({ command: "pwd" });
@@ -64,7 +64,7 @@ test("workspace demand wakes the same sleeping allocation without creating a rep
 test("retrying a known identity reuses its allocation and rejects an image conflict", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const request = { orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 };
+  const request = { orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 };
   const first = await orbital.create(request);
   const second = await orbital.create(request);
   assert.equal(second.resourceId, first.resourceId);
@@ -75,7 +75,7 @@ test("retrying a known identity reuses its allocation and rejects an image confl
 test("remote bytes preserve literal paths and edit changes exactly one match", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   const path = "space λ $(touch sentinel).txt";
   await workspace.writeFile(path, Buffer.from("original\n"));
@@ -89,7 +89,7 @@ test("remote bytes preserve literal paths and edit changes exactly one match", a
 test("unknown command and write failures remain uncertain and are never replayed", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   provider.exec = async () => { provider.effects.push("admitted"); throw new Error("lost transport"); };
   await assert.rejects(workspace.exec({ command: "change" }), { outcome: "uncertain" });
@@ -103,7 +103,7 @@ test("unknown command and write failures remain uncertain and are never replayed
 test("directory selection validates remotely and returns the canonical directory", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   provider.exec = async (_orb, request) => ({ kind: "exited", exitCode: request.command.includes("missing") ? 1 : 0, stdout: "/home/user/project\n", stderr: "", jobId: "directory", outputPath: "/home/user/.orbital/jobs/directory/output" });
   assert.equal(await workspace.validateDirectory("project"), "/home/user/project");
@@ -114,7 +114,7 @@ test("directory selection validates remotely and returns the canonical directory
 test("URL lookup is passive and deletion makes later demand fail without replacement", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  const orb = await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   orb.state = "sleeping";
   assert.equal(await orbital.url({ orbId: orb.orbId, port: 3000 }), "https://3000-allocation-1.example.test");
   assert.equal((await orbital.inspect({ orbId: orb.orbId }))?.state, "sleeping");
@@ -126,7 +126,7 @@ test("URL lookup is passive and deletion makes later demand fail without replace
 test("pre-cancelled creation admits no work and cancelled commands do not submit", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const request = { orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 };
+  const request = { orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 };
   await assert.rejects(orbital.create(request, { signal: AbortSignal.abort() }), { outcome: "not_started", code: "cancelled" });
   assert.equal(provider.orbs.length, 0);
   await orbital.create(request);
@@ -138,7 +138,7 @@ test("pre-cancelled creation admits no work and cancelled commands do not submit
 test("an open workspace keeps its resolved allocation while provider metadata changes", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   await workspace.writeFile("sentinel", Buffer.from("original allocation"));
   provider.orbs[0]!.resourceId = "replacement";
@@ -151,7 +151,7 @@ test("cancellation after creation admission reports the surviving allocation wit
   const original = provider.create.bind(provider);
   provider.create = async (request) => { const orb = await original(request); controller.abort(); return orb; };
   const orbital = createOrbital({ provider });
-  await assert.rejects(orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 }, { signal: controller.signal }), (error: unknown) => {
+  await assert.rejects(orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 }, { signal: controller.signal }), (error: unknown) => {
     assert.equal((error as { outcome: string }).outcome, "uncertain");
     assert.equal((error as { evidence: { resourceId: string } }).evidence.resourceId, "allocation-1");
     return true;
@@ -163,8 +163,8 @@ test("invalid remote context and execution timeout fail before provider work", a
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
   await assert.rejects(orbital.openWorkspace({ orbId: "pi-session", orbCwd: "relative" }), { code: "invalid_directory" });
-  await assert.rejects(orbital.create({ orbId: "pi-session", image: "", idleTimeoutMs: -1 }), { code: "invalid_create" });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await assert.rejects(orbital.create({ orbId: "pi-session", image: "", leaseWindowMs: -1 }), { code: "invalid_create" });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   await assert.rejects(workspace.exec({ command: "effect", timeoutMs: 0 }), { code: "invalid_timeout" });
   assert.deepEqual(provider.effects, ["create:allocation-1"]);
@@ -183,7 +183,7 @@ test("every public operation rejects an empty orb ID", async () => {
 test("cancelling an open workspace prevents a later file mutation", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const controller = new AbortController();
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" }, { signal: controller.signal });
   controller.abort();
@@ -194,7 +194,7 @@ test("cancelling an open workspace prevents a later file mutation", async () => 
 test("workspace resolution captures the caller directory before external lookup completes", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const target = { orbId: "pi-session", orbCwd: "/home/user" };
   const opening = orbital.openWorkspace(target);
   target.orbCwd = "/changed-during-lookup";
@@ -204,7 +204,7 @@ test("workspace resolution captures the caller directory before external lookup 
 test("background commands reject a timeout rather than silently ignoring it", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  await orbital.create({ orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
   const workspace = await orbital.openWorkspace({ orbId: "pi-session", orbCwd: "/home/user" });
   await assert.rejects(workspace.exec({ command: "service", mode: "background", timeoutMs: 100 }), { outcome: "not_started", code: "invalid_timeout" });
   assert.deepEqual(provider.effects, ["create:allocation-1"]);
@@ -213,7 +213,7 @@ test("background commands reject a timeout rather than silently ignoring it", as
 test("successful demand wake returns a running snapshot even when the adapter does not mutate its input", async () => {
   const provider = new SimulatedProvider();
   const orbital = createOrbital({ provider });
-  const request = { orbId: "pi-session", image: "test-image", idleTimeoutMs: 60000 };
+  const request = { orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 };
   await orbital.create(request);
   provider.resume = async (orb) => { provider.orbs = provider.orbs.map(item => item.resourceId === orb.resourceId ? { ...item, state: "running" } : item); };
   provider.orbs[0]!.state = "sleeping";

@@ -5,7 +5,7 @@ import type { ExecRequest, ExecResult, FileStat } from "./workspace.js";
 export interface AllocationRequest {
   orbId: string;
   image: string;
-  idleTimeoutMs: number;
+  leaseWindowMs: number;
   creationIntent?: CreationIntent;
   env?: Record<string, string>;
 }

@@ -31,7 +31,7 @@ test("the image command applies explicit image input before saved-file diagnosti
 });
 
 test("image preparation ignores settings that it does not consume", async () => {
-  const result = await runCli(JSON.stringify({ image: "custom:v1", idleTimeoutMs: "invalid" }), ["--refresh"]);
+  const result = await runCli(JSON.stringify({ image: "custom:v1", leaseWindowMs: "invalid" }), ["--refresh"]);
   assert.equal(result.status, 1);
   assert.equal(JSON.parse(result.stderr).code, "external_refresh_unsupported");
 });

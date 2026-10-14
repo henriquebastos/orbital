@@ -23,7 +23,7 @@ export interface PiOptions extends Partial<ImageResources> {
   image?: string;
   preparation?: () => Promise<string | undefined>;
   env?: Record<string, string>;
-  idleTimeoutMs: number;
+  leaseWindowMs: number;
   autoOn?: boolean;
   skillRoots?: readonly string[];
   creationProblem?: string;
@@ -65,7 +65,7 @@ const orbitalSchema = Type.Object({
     { description: "Required for set_route." })),
   name: Type.Optional(settingNameSchema),
   value: Type.Optional(Type.Union([Type.String(), Type.Number(), Type.Boolean(), Type.Array(Type.String())],
-    { description: "Required for settings_set. image: string; idleTimeoutMs, cpuCount, memoryMB, minFreeDiskMb: numbers; autoOn: boolean; forwardEnv and skillRoots: string arrays." })),
+    { description: "Required for settings_set. image: string; leaseWindowMs, cpuCount, memoryMB, minFreeDiskMb: numbers; autoOn: boolean; forwardEnv and skillRoots: string arrays." })),
   orbCwd: Type.Optional(Type.String()),
   port: Type.Optional(Type.Number()),
 }, { additionalProperties: false });

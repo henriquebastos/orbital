@@ -29,7 +29,7 @@ export default function fixtureExtension(pi: ExtensionAPI): void {
       if (process.env.ORBITAL_PI_CREATE_DELAY) await new Promise(done => setTimeout(done, 100));
       mkdirSync(orbRoot, { recursive: true });
       const snapshot: OrbSnapshot = { orbId: request.orbId, resourceId: randomUUID(),
-        image: request.image, state: "running", idleTimeoutMs: request.idleTimeoutMs };
+        image: request.image, state: "running", leaseWindowMs: request.leaseWindowMs };
       writeFileSync(snapshotPath, JSON.stringify(snapshot));
       if (process.env.ORBITAL_PI_FAULT === "creation") {
         throw new OrbitalError("uncertain", "fixture_creation_lost", "The allocation reply was lost.");
@@ -80,7 +80,7 @@ export default function fixtureExtension(pi: ExtensionAPI): void {
       return { kind: stat.isDirectory() ? "directory" : "file", size: stat.size };
     },
   };
-  registerOrbitalPi(pi, createOrbital({ provider }), { image: "fixture-image", idleTimeoutMs: 60_000,
+  registerOrbitalPi(pi, createOrbital({ provider }), { image: "fixture-image", leaseWindowMs: 60_000,
     autoOn: process.env.ORBITAL_AUTO_ON === "true",
     skillRoots: process.env.ORBITAL_SKILL_ROOTS?.split(delimiter).filter(Boolean) });
   pi.registerCommand("fixture-tree", { description: "Select a fixture branch.",

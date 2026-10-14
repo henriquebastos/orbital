@@ -10,7 +10,7 @@ The build checks Node 22.15.0, the renewal module import, passwordless sudo, and
 The package ships the recipe and guest files. No source checkout or local Docker is required for the installed command.
 See [the preparation contract](image-preparation.md) for cache and refresh behavior.
 
-`idleTimeoutMs` is an integer of at least 3 milliseconds. It sets the sandbox's initial automatic pause timeout and the guest runner's renewal window for ordinary commands. The runner renews before one third of that window passes. Background services do not renew the sandbox.
+`leaseWindowMs` is an integer of at least 3 milliseconds. It sets the sandbox's initial automatic pause timeout and the guest runner's renewal window for ordinary commands. The runner renews before one third of that window passes. Background services do not renew the sandbox.
 
 E2B gives an automatically resumed sandbox at least five minutes before its next timeout. Orbital does not shorten that provider lease after HTTP wake. An exact idle delay after native wake is not guaranteed.
 

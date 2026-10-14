@@ -191,16 +191,16 @@ test("the optional Node adapter saves only selected user values", async () => {
   try {
     const settings = createNodeSettings({ schema: orbitalSettingsSchema, directory, environment: { ORBITAL_IMAGE: "env-image" } });
     assert.equal(settings.filePath, join(directory, "settings.json"));
-    assert.equal((await settings.refresh()).effective.idleTimeoutMs, 60_000);
+    assert.equal((await settings.refresh()).effective.leaseWindowMs, 60_000);
     const afterSave = await settings.set("image", "saved-image");
     assert.equal(afterSave.saved.image, "saved-image");
     assert.equal(afterSave.effective.image, "env-image");
     assert.equal(afterSave.source.image, "environment");
-    await settings.set("idleTimeoutMs", 90_000);
+    await settings.set("leaseWindowMs", 90_000);
 
     const second = createNodeSettings({ schema: orbitalSettingsSchema, directory, environment: {} });
-    assert.deepEqual((await second.refresh()).saved, { image: "saved-image", idleTimeoutMs: 90_000 });
-    assert.deepEqual((await settings.unset("idleTimeoutMs")).saved, { image: "saved-image" });
+    assert.deepEqual((await second.refresh()).saved, { image: "saved-image", leaseWindowMs: 90_000 });
+    assert.deepEqual((await settings.unset("leaseWindowMs")).saved, { image: "saved-image" });
     assert.deepEqual((await second.refresh()).saved, { image: "saved-image" });
   } finally {
     await rm(directory, { recursive: true, force: true });
@@ -216,7 +216,7 @@ test("a malformed settings file stays intact after refresh and rejected edits", 
     const settings = createNodeSettings({ schema: orbitalSettingsSchema, directory, environment: {} });
     const snapshot = await settings.refresh();
 
-    assert.deepEqual(snapshot.effective, { ...resources, image: undefined, idleTimeoutMs: 60_000, forwardEnv: [] });
+    assert.deepEqual(snapshot.effective, { ...resources, image: undefined, leaseWindowMs: 60_000, forwardEnv: [] });
     assert.deepEqual(snapshot.diagnostics.map(({ source, path }) => [source, path]), [["user", filePath]]);
     assert.equal(snapshot.diagnostics[0]?.message.includes("private-value"), false);
     await assert.rejects(settings.set("image", "replacement"), /Cannot edit invalid settings/);
@@ -276,15 +276,15 @@ test("editing a returned snapshot cannot change the adapter's current values", a
     await settings.refresh();
     const visible = await settings.set("image", "saved-image");
     visible.saved.image = "changed";
-    visible.effective.idleTimeoutMs = 1;
+    visible.effective.leaseWindowMs = 1;
     visible.source.image = "default";
     visible.diagnostics.push({ source: "user", message: "injected" });
 
     assert.deepEqual(settings.snapshot(), {
       saved: { image: "saved-image" },
-      effective: { ...resources, image: "saved-image", idleTimeoutMs: 60_000, forwardEnv: [] },
+      effective: { ...resources, image: "saved-image", leaseWindowMs: 60_000, forwardEnv: [] },
       source: { cpuCount: "default", memoryMB: "default", minFreeDiskMb: "default",
-        image: "user", idleTimeoutMs: "default", forwardEnv: "default" },
+        image: "user", leaseWindowMs: "default", forwardEnv: "default" },
       diagnostics: [],
     });
   } finally {
@@ -300,9 +300,9 @@ test("a stale settings view cannot overwrite an external edit", async () => {
     await settings.refresh();
     await writeFile(filePath, '{"image":"external-image"}\n');
 
-    await assert.rejects(settings.set("idleTimeoutMs", 90_000), /changed on disk/);
+    await assert.rejects(settings.set("leaseWindowMs", 90_000), /changed on disk/);
     assert.equal((await settings.refresh()).saved.image, "external-image");
-    assert.equal((await settings.set("idleTimeoutMs", 90_000)).saved.idleTimeoutMs, 90_000);
+    assert.equal((await settings.set("leaseWindowMs", 90_000)).saved.leaseWindowMs, 90_000);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -316,7 +316,7 @@ test("a settings read error appears in diagnostics and blocks edits", async () =
     const settings = createNodeSettings({ schema: orbitalSettingsSchema, directory, environment: {} });
     const snapshot = await settings.refresh();
 
-    assert.deepEqual(snapshot.effective, { ...resources, image: undefined, idleTimeoutMs: 60_000, forwardEnv: [] });
+    assert.deepEqual(snapshot.effective, { ...resources, image: undefined, leaseWindowMs: 60_000, forwardEnv: [] });
     assert.deepEqual(snapshot.diagnostics.map(({ source, path }) => [source, path]), [["user", filePath]]);
     await assert.rejects(settings.set("image", "replacement"), /Cannot edit invalid settings/);
   } finally {

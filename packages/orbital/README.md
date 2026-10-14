@@ -31,7 +31,7 @@ const orbital = createOrbital({
   provider: createE2BProvider(e2b),
   images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory, resources: configuration.resources }),
 });
-await orbital.create({ orbId: "my-workspace", idleTimeoutMs: 60000, env: configuration.env(["E2B_API_KEY"]) });
+await orbital.create({ orbId: "my-workspace", leaseWindowMs: 60000, env: configuration.env(["E2B_API_KEY"]) });
 const workspace = await orbital.openWorkspace({ orbId: "my-workspace", orbCwd: "/home/user" });
 await workspace.exec({ command: "pwd" });
 ```

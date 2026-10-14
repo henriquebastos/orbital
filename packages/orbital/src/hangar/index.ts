@@ -8,7 +8,7 @@ import { validateEnvironment } from "../environment.js";
 
 export interface CreateRequest extends ImageRequest {
   orbId: string;
-  idleTimeoutMs: number;
+  leaseWindowMs: number;
   env?: Record<string, string>;
 }
 
@@ -29,15 +29,15 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
       validateEnvironment(request.env);
       request = { ...request, env: request.env === undefined ? undefined : { ...request.env } };
       requireId(request.orbId);
-      if (!Number.isSafeInteger(request.idleTimeoutMs) || request.idleTimeoutMs < 3) {
-        throw new OrbitalError("not_started", "invalid_create", "An integer idle timeout of at least 3 milliseconds is required.");
+      if (!Number.isSafeInteger(request.leaseWindowMs) || request.leaseWindowMs < 3) {
+        throw new OrbitalError("not_started", "invalid_create", "An integer lease window of at least 3 milliseconds is required.");
       }
       const imageRequest = normalizeImageRequest(request);
       const intent = creationIntent(imageRequest);
       const existing = await configuration.provider.resolve(request.orbId);
       checkCancellation(observer);
       if (existing) {
-        assertCreationMatches(existing, intent, request.idleTimeoutMs);
+        assertCreationMatches(existing, intent, request.leaseWindowMs);
         if (existing.state === "sleeping") {
           await configuration.provider.resume(existing);
         }
@@ -52,7 +52,7 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
         throw new OrbitalError("not_started", "image_manager_unavailable", "Default images and preparation require an image manager.");
       }
       checkCancellation(observer);
-      const orb = await configuration.provider.create({ orbId: request.orbId, idleTimeoutMs: request.idleTimeoutMs,
+      const orb = await configuration.provider.create({ orbId: request.orbId, leaseWindowMs: request.leaseWindowMs,
         image: image!, creationIntent: intent, env: request.env }, observer);
       if (observer.signal?.aborted) {
         throw new OrbitalError("uncertain", "creation_cancelled", "Creation was admitted before cancellation. The allocation may remain.", { orbId: orb.orbId, resourceId: orb.resourceId });

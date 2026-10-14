@@ -34,7 +34,7 @@ Growth is best-effort, so inspect actual free space after creation. E2B enforces
 | `orbital.prepare({ preparation })` | Cache successful Bash preparation over that base. |
 | `orbital.prepare({ preparation, refresh: true })` | Create a replacement preparation generation for future allocations. |
 | `orbital.prepare({ refresh: true })` | Rebuild the owned base. |
-| `orbital.create({ orbId, idleTimeoutMs, preparation? })` | Reuse a matching Orb or prepare an image and allocate a new Orb. |
+| `orbital.create({ orbId, leaseWindowMs, preparation? })` | Reuse a matching Orb or prepare an image and allocate a new Orb. |
 
 All image requests accept an optional `image` override. It must identify an existing compatible E2B image.
 An override is not a Docker image name. Refresh without preparation requires the owned base recipe.
@@ -44,11 +44,11 @@ Nonempty content uses exact bytes for identity, including comments and whitespac
 
 Creation follows this order:
 
-- Resolve the Orb ID and compare its saved creation intent and idle timeout.
+- Resolve the Orb ID and compare its saved creation intent and lease window.
 - If the Orb exists and matches, wake it when needed and return it.
 - Otherwise, resolve the base and look for a ready preparation image.
 - On a miss, prepare a temporary seed, check the runtime, capture the image, and publish its receipt.
-- Allocate the live Orb with its own identity, idle policy, and renewal credential.
+- Allocate the live Orb with its own identity, lease window, and renewal credential.
 - Return the Orb. The caller can now clone repositories and install project dependencies.
 
 Preparation returns `{ reference, baseReference, cacheKey, reused }`.
@@ -87,7 +87,7 @@ Each allocation uses an exact build reference, not a mutable tag.
 import { readFile } from "node:fs/promises";
 
 const preparation = await readFile("./orbital-tools.sh", "utf8");
-const orb = await orbital.create({ orbId: "hamsterdan-42", idleTimeoutMs: 60000, preparation });
+const orb = await orbital.create({ orbId: "hamsterdan-42", leaseWindowMs: 60000, preparation });
 const home = await orbital.openWorkspace({ orbId: orb.orbId, orbCwd: "/home/user" });
 const checkout = await home.exec({
   command: "git clone --depth 1 https://github.com/henriquebastos/hamsterdan.git",

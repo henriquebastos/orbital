@@ -71,7 +71,7 @@ export function createPiSession(pi: ExtensionAPI, orbital: PiOrbitalApi,
       const { options, preparation } = await resolveNewAllocationInputs();
       // 4. Save requested before submission. Implicit demand cannot retry that state.
       persistControl({ ...current, route: "remote", allocation: "requested" });
-      const orb = await orbital.create({ orbId: id, image: options.image, preparation, idleTimeoutMs: options.idleTimeoutMs,
+      const orb = await orbital.create({ orbId: id, image: options.image, preparation, leaseWindowMs: options.leaseWindowMs,
         env: options.env }, { signal });
       if (orb.orbId !== id) throw new Error("Orbital returned an unexpected orb ID.");
     }

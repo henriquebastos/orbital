@@ -3,7 +3,7 @@ export interface OrbSnapshot {
   resourceId: string;
   image: string;
   state: "running" | "sleeping";
-  idleTimeoutMs: number;
+  leaseWindowMs: number;
   sandboxDomain?: string;
   resources?: { cpuCount: number; memoryMB: number };
   creationIntent?: CreationIntent;

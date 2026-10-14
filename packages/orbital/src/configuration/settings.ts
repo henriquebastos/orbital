@@ -40,7 +40,7 @@ export interface ImageResources {
 
 export interface OrbitalSettings extends ImageResources {
   image?: string;
-  idleTimeoutMs: number;
+  leaseWindowMs: number;
   forwardEnv: string[];
 }
 
@@ -49,7 +49,7 @@ function nonemptyString(value: unknown): string {
   return value;
 }
 
-function idleTimeout(value: unknown): number {
+function leaseWindow(value: unknown): number {
   if (!Number.isSafeInteger(value) || (value as number) < 3) throw new Error("must be a safe integer of at least 3 milliseconds");
   return value as number;
 }
@@ -94,13 +94,13 @@ export const orbitalSettingsSchema: SettingsSchema<OrbitalSettings> = {
     parseSaved: nonemptyString,
     parseEnvironment: nonemptyString,
   },
-  idleTimeoutMs: {
-    environment: "ORBITAL_IDLE_TIMEOUT_MS",
+  leaseWindowMs: {
+    environment: "ORBITAL_LEASE_WINDOW_MS",
     defaultValue: 60_000,
-    parseSaved: idleTimeout,
+    parseSaved: leaseWindow,
     parseEnvironment(value) {
       if (!/^[0-9]+$/.test(value)) throw new Error("must contain decimal digits only");
-      return idleTimeout(Number(value));
+      return leaseWindow(Number(value));
     },
   },
 };

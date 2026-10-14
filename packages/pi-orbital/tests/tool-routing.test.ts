@@ -8,7 +8,7 @@ import { SimulatedProvider } from "../../../tests/support/provider.js";
 async function fixture(beforeOpen?: (observer: Observer) => Promise<void>) {
   const provider = new SimulatedProvider();
   provider.orbs.push({ orbId: "agent-original", resourceId: "allocation-1", image: "fixture-image",
-    state: "running", idleTimeoutMs: 60000 });
+    state: "running", leaseWindowMs: 60000 });
   provider.files.set("allocation-1:/home/user/note.txt", Buffer.from("original"));
   provider.files.set("allocation-1:/home/user/.orbital/jobs/job-1/output", Buffer.from(""));
   const orbital = createOrbital({ provider });
@@ -32,7 +32,7 @@ async function fixture(beforeOpen?: (observer: Observer) => Promise<void>) {
     appendEntry(type: string, data: unknown) { sessionManager.appendCustomEntry(type, data); },
     on(name: string, handler: (event: never, context: ExtensionContext) => unknown) { handlers.set(name, handler); },
   };
-  registerOrbitalPi(pi as never, orbital, { image: "fixture-image", idleTimeoutMs: 60000 });
+  registerOrbitalPi(pi as never, orbital, { image: "fixture-image", leaseWindowMs: 60000 });
   await handlers.get("session_start")!({ reason: "resume" } as never, ctx);
   return { provider, acquisitions, ctx, handlers,
     execute(name: string, params: Record<string, unknown>, signal?: AbortSignal) {

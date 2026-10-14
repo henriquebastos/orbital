@@ -7,32 +7,32 @@ const resourceSources = { cpuCount: "default", memoryMB: "default", minFreeDiskM
 
 test("shared settings use defaults, saved values, and named environment overrides", () => {
   const snapshot = resolveSettings(orbitalSettingsSchema, {
-    user: { image: "saved-image", idleTimeoutMs: 90_000 },
+    user: { image: "saved-image", leaseWindowMs: 90_000 },
     environment: { ORBITAL_IMAGE: "env-image" },
   });
 
-  assert.deepEqual(snapshot.effective, { ...resources, image: "env-image", idleTimeoutMs: 90_000, forwardEnv: [] });
-  assert.deepEqual(snapshot.saved, { image: "saved-image", idleTimeoutMs: 90_000 });
-  assert.deepEqual(snapshot.source, { ...resourceSources, image: "environment", idleTimeoutMs: "user", forwardEnv: "default" });
+  assert.deepEqual(snapshot.effective, { ...resources, image: "env-image", leaseWindowMs: 90_000, forwardEnv: [] });
+  assert.deepEqual(snapshot.saved, { image: "saved-image", leaseWindowMs: 90_000 });
+  assert.deepEqual(snapshot.source, { ...resourceSources, image: "environment", leaseWindowMs: "user", forwardEnv: "default" });
   assert.deepEqual(snapshot.diagnostics, []);
 
   const defaults = resolveSettings(orbitalSettingsSchema, {});
-  assert.deepEqual(defaults.effective, { ...resources, image: undefined, idleTimeoutMs: 60_000, forwardEnv: [] });
-  assert.deepEqual(defaults.source, { ...resourceSources, image: "default", idleTimeoutMs: "default", forwardEnv: "default" });
+  assert.deepEqual(defaults.effective, { ...resources, image: undefined, leaseWindowMs: 60_000, forwardEnv: [] });
+  assert.deepEqual(defaults.source, { ...resourceSources, image: "default", leaseWindowMs: "default", forwardEnv: "default" });
 });
 
 test("invalid saved and environment values report their source even when another value wins", () => {
   const snapshot = resolveSettings(orbitalSettingsSchema, {
-    user: { image: "saved-image", idleTimeoutMs: 2, extra: true },
-    environment: { ORBITAL_IMAGE: " ", ORBITAL_IDLE_TIMEOUT_MS: "3e4" },
+    user: { image: "saved-image", leaseWindowMs: 2, extra: true },
+    environment: { ORBITAL_IMAGE: " ", ORBITAL_LEASE_WINDOW_MS: "3e4" },
   });
 
-  assert.deepEqual(snapshot.effective, { ...resources, image: "saved-image", idleTimeoutMs: 60_000, forwardEnv: [] });
+  assert.deepEqual(snapshot.effective, { ...resources, image: "saved-image", leaseWindowMs: 60_000, forwardEnv: [] });
   assert.deepEqual(snapshot.diagnostics.map(({ source, key }) => `${source}:${key}`).sort(), [
-    "environment:idleTimeoutMs",
+    "environment:leaseWindowMs",
     "environment:image",
     "user:extra",
-    "user:idleTimeoutMs",
+    "user:leaseWindowMs",
   ].sort());
   assert.equal(snapshot.diagnostics.some(item => item.message.includes("3e4")), false);
 });

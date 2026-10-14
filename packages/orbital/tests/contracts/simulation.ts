@@ -21,7 +21,7 @@ const schedule: Step[] = replay?.schedule ?? [
 ].map((step, index) => ({ at: index * 100, ...step }));
 const provider = new SimulatedProvider();
 const orbital = createOrbital({ provider });
-const request = { orbId: "simulation-session", image: "simulation-image", idleTimeoutMs: 50 };
+const request = { orbId: "simulation-session", image: "simulation-image", leaseWindowMs: 50 };
 const trace: Record<string, unknown>[] = [];
 let failure: string | undefined;
 try {

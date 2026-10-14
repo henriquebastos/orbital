@@ -12,7 +12,7 @@ const orb: OrbSnapshot = {
   resourceId: "sandbox-1",
   image: "orbital-image:v1",
   state: "sleeping",
-  idleTimeoutMs: 60_000,
+  leaseWindowMs: 60_000,
   sandboxDomain: "region.e2b.app",
 };
 
@@ -24,7 +24,7 @@ test("creation sends the complete instance environment to E2B without metadata s
     return { async getInfo() { return { sandboxId: "sandbox-1", metadata: options.metadata, state: "running", cpuCount: 8, memoryMB: 8192 };  } };
   });
   const provider = createE2BProvider({ apiKey: "provider-key" });
-  const request = { orbId: "env-orb", image: "base", idleTimeoutMs: 60000 };
+  const request = { orbId: "env-orb", image: "base", leaseWindowMs: 60000 };
   const environments: Array<Record<string, string>> = [
     { E2B_API_KEY: "instance-key", GH_TOKEN: "test-token", SANDBOX_URL: "https://sandbox.test", EMPTY: "" },
     { E2B_API_KEY: "instance-key", "custom.name": "custom-value" }];
@@ -41,7 +41,7 @@ test("creation requires an explicitly supplied renewal key before any E2B reques
   const provider = createE2BProvider({ apiKey: "provider-key" });
   const environments: Array<Record<string, string> | undefined> = [undefined, {}, { E2B_API_KEY: "" }, { E2B_API_KEY: " " }];
   for (const env of environments) {
-    await assert.rejects(provider.create({ orbId: "env-orb", image: "base", idleTimeoutMs: 60000, env }),
+    await assert.rejects(provider.create({ orbId: "env-orb", image: "base", leaseWindowMs: 60000, env }),
       { outcome: "not_started", code: "missing_renewal_key" });
   }
 });
@@ -104,9 +104,9 @@ test("native URLs use the passively observed sandbox domain and require a valid 
 
 test("invalid creation policy fails before an E2B request", async () => {
   const provider = createE2BProvider({ apiKey: "test-only" });
-  for (const idleTimeoutMs of [0, 2]) {
+  for (const leaseWindowMs of [0, 2]) {
     await assert.rejects(
-      provider.create({ orbId: "session-1", image: "base", idleTimeoutMs }),
+      provider.create({ orbId: "session-1", image: "base", leaseWindowMs }),
       (error) => error instanceof OrbitalError && error.outcome === "not_started" && error.code === "invalid_create",
     );
   }
@@ -134,7 +134,7 @@ test("a lost E2B create response stays uncertain and is sent once", async () => 
     const provider = createE2BProvider({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}`,
       requestTimeoutMs: 2_000 });
     await assert.rejects(
-      provider.create({ orbId: "lost-response", image: "test-image", idleTimeoutMs: 30_000, env: { E2B_API_KEY: "test-key" } }),
+      provider.create({ orbId: "lost-response", image: "test-image", leaseWindowMs: 30_000, env: { E2B_API_KEY: "test-key" } }),
       (cause) => cause instanceof OrbitalError && cause.outcome === "uncertain" &&
         cause.code === "create_unknown" && cause.evidence.orbId === "lost-response",
     );
@@ -168,7 +168,7 @@ test("an E2B rate limit rejects creation without a retry", async () => {
     const provider = createE2BProvider({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}`,
       requestTimeoutMs: 2_000 });
     await assert.rejects(
-      provider.create({ orbId: "rate-limited", image: "test-image", idleTimeoutMs: 30_000, env: { E2B_API_KEY: "test-key" } }),
+      provider.create({ orbId: "rate-limited", image: "test-image", leaseWindowMs: 30_000, env: { E2B_API_KEY: "test-key" } }),
       (cause) => cause instanceof OrbitalError && cause.outcome === "not_started" && cause.code === "create_rejected",
     );
     assert.equal(creates, 1);
@@ -221,7 +221,7 @@ test("lookup rejects duplicate Orb IDs across running and paused sandboxes", asy
     sandboxID: `sandbox-${index + 1}`,
     templateID: "template-1",
     metadata: { orbital_v2_orb_id: "same-id", orbital_v2_image: "image-1",
-      orbital_v2_idle_timeout_ms: "30000" },
+      orbital_v2_lease_window_ms: "30000" },
     state,
     startedAt: "2026-09-24T00:00:00Z",
     endAt: "2026-09-24T00:01:00Z",
@@ -259,7 +259,7 @@ test("lookup rejects malformed saved creation intent", async () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify([{ sandboxID: "sandbox-1", templateID: "prepared-image",
         metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "prepared-image",
-          orbital_v2_idle_timeout_ms: "30000", orbital_v2_creation_intent: invalid[index++] },
+          orbital_v2_lease_window_ms: "30000", orbital_v2_creation_intent: invalid[index++] },
         state: "running", startedAt: "2026-09-24T00:00:00Z", endAt: "2026-09-24T00:01:00Z",
         cpuCount: 2, memoryMB: 1024, envdVersion: "0.6.10" }]));
       return;
@@ -290,7 +290,7 @@ test("a second provider create matches saved selectors instead of the prepared a
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify([{ sandboxID: "sandbox-1", templateID: "prepared-image",
         metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "prepared-image",
-          orbital_v2_idle_timeout_ms: "30000",
+          orbital_v2_lease_window_ms: "30000",
           orbital_v2_creation_intent: JSON.stringify({ image: "base-image", preparationHash: hash }) },
         state: "running", startedAt: "2026-09-24T00:00:00Z", endAt: "2026-09-24T00:01:00Z",
         cpuCount: 2, memoryMB: 1024, envdVersion: "0.6.10" }]));
@@ -304,7 +304,7 @@ test("a second provider create matches saved selectors instead of the prepared a
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const provider = createE2BProvider({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}` });
-    const request = { orbId: "session-1", image: "prepared-image", idleTimeoutMs: 30_000,
+    const request = { orbId: "session-1", image: "prepared-image", leaseWindowMs: 30_000,
       env: { E2B_API_KEY: "test-key" }, creationIntent: { image: "base-image", preparationHash: hash } };
     assert.deepEqual((await provider.resolve("session-1"))?.creationIntent, request.creationIntent);
     assert.equal((await provider.create(request)).resourceId, "sandbox-1");
@@ -324,7 +324,7 @@ test("legacy provider metadata accepts the original explicit image only", async 
       response.writeHead(200, { "content-type": "application/json" });
       response.end(JSON.stringify([{ sandboxID: "sandbox-1", templateID: "legacy-image",
         metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "legacy-image",
-          orbital_v2_idle_timeout_ms: "30000" },
+          orbital_v2_lease_window_ms: "30000" },
         state: "running", startedAt: "2026-09-24T00:00:00Z", endAt: "2026-09-24T00:01:00Z",
         cpuCount: 2, memoryMB: 1024, envdVersion: "0.6.10" }]));
       return;
@@ -337,7 +337,7 @@ test("legacy provider metadata accepts the original explicit image only", async 
     const address = server.address();
     assert.ok(address && typeof address !== "string");
     const provider = createE2BProvider({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}` });
-    const request = { orbId: "session-1", image: "legacy-image", idleTimeoutMs: 30_000, env: { E2B_API_KEY: "test-key" } };
+    const request = { orbId: "session-1", image: "legacy-image", leaseWindowMs: 30_000, env: { E2B_API_KEY: "test-key" } };
     assert.equal((await provider.create(request)).resourceId, "sandbox-1");
     await assert.rejects(provider.create({ ...request, creationIntent: {} }),
       { outcome: "not_started", code: "legacy_creation_intent_unknown" });
@@ -358,7 +358,7 @@ test("cancellation during the second provider lookup prevents allocation and wak
       controller.abort();
       const entries = existing ? [{ sandboxID: "sandbox-1", templateID: "base-image",
         metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "base-image",
-          orbital_v2_idle_timeout_ms: "30000" },
+          orbital_v2_lease_window_ms: "30000" },
         state: "paused", startedAt: "2026-09-24T00:00:00Z", endAt: "2026-09-24T00:01:00Z",
         cpuCount: 2, memoryMB: 1024, envdVersion: "0.6.10" }] : [];
       response.writeHead(200, { "content-type": "application/json" });
@@ -376,7 +376,7 @@ test("cancellation during the second provider lookup prevents allocation and wak
     const provider = createE2BProvider({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}` });
     for (existing of [false, true]) {
       controller = new AbortController();
-      await assert.rejects(provider.create({ orbId: "session-1", image: "base-image", idleTimeoutMs: 30_000, env: { E2B_API_KEY: "test-key" } },
+      await assert.rejects(provider.create({ orbId: "session-1", image: "base-image", leaseWindowMs: 30_000, env: { E2B_API_KEY: "test-key" } },
         { signal: controller.signal }), { outcome: "not_started", code: "cancelled_before_create" });
     }
     assert.equal(creates, 0);

@@ -49,16 +49,16 @@ async function main(): Promise<void> {
   try {
     assert.equal(await provider.resolve(orbId), undefined);
     createSubmitted = true;
-    owned = await provider.create({ orbId, image, idleTimeoutMs: 30_000, env: { E2B_API_KEY: apiKey } });
+    owned = await provider.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
     record("created", { resourceId: owned.resourceId, state: owned.state,
       sandboxDomain: owned.sandboxDomain });
     assert.equal(owned.orbId, orbId);
     assert.equal(owned.image, image);
     assert.equal((await provider.resolve(orbId))?.resourceId, owned.resourceId);
-    const repeated = await provider.create({ orbId, image, idleTimeoutMs: 30_000, env: { E2B_API_KEY: apiKey } });
+    const repeated = await provider.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
     assert.equal(repeated.resourceId, owned.resourceId);
     await assert.rejects(
-      provider.create({ orbId, image: "base", idleTimeoutMs: 30_000, env: { E2B_API_KEY: apiKey } }),
+      provider.create({ orbId, image: "base", leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } }),
       (cause) => cause instanceof OrbitalError && cause.code === "orb_conflict" && cause.outcome === "not_started",
     );
     record("identity_policy_passed", { resourceId: owned.resourceId });

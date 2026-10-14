@@ -16,13 +16,13 @@ function imageManager(reference = "prepared-image") {
   return { images, requests };
 }
 
-const request = { orbId: "session-1", idleTimeoutMs: 60_000 };
+const request = { orbId: "session-1", leaseWindowMs: 60_000 };
 
-test("unsupported idle timeouts fail before image preparation or provider lookup", async () => {
+test("unsupported lease windows fail before image preparation or provider lookup", async () => {
   const manager = imageManager();
   const orbital = createOrbital({ provider: {} as never, images: manager.images });
-  for (const idleTimeoutMs of [1, 2]) {
-    await assert.rejects(orbital.create({ ...request, idleTimeoutMs }), { code: "invalid_create" });
+  for (const leaseWindowMs of [1, 2]) {
+    await assert.rejects(orbital.create({ ...request, leaseWindowMs }), { code: "invalid_create" });
   }
   assert.deepEqual(manager.requests, []);
 });
@@ -84,7 +84,7 @@ test("a default creation reuses an existing orb even when a new default image is
 test("legacy metadata permits the original explicit image but rejects default and prepared requests", async () => {
   const provider = new SimulatedProvider();
   provider.orbs.push({ orbId: request.orbId, resourceId: "legacy", image: "legacy-image",
-    state: "running", idleTimeoutMs: request.idleTimeoutMs });
+    state: "running", leaseWindowMs: request.leaseWindowMs });
   const manager = imageManager();
   const orbital = createOrbital({ provider, images: manager.images });
   assert.equal((await orbital.create({ ...request, image: "legacy-image" })).resourceId, "legacy");

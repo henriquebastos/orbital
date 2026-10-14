@@ -153,7 +153,7 @@ async function testPreparation(): Promise<void> {
   } };
 
   record("cold_default_create_intent", { orbId: orbIds.base });
-  const baseOrb = await orbital.create({ orbId: orbIds.base, idleTimeoutMs: 30_000, env }, observer);
+  const baseOrb = await orbital.create({ orbId: orbIds.base, leaseWindowMs: 30_000, env }, observer);
   assert.ok(progress.includes("building_base"));
   ownArtifact(baseOrb.image);
   record("cold_default_created", { resourceId: baseOrb.resourceId, image: baseOrb.image, progress: [...progress] });
@@ -175,8 +175,8 @@ async function testPreparation(): Promise<void> {
   record("script_ready", { ...prepared, progress: [...progress], output: output.join("") });
 
   record("allocation_intent", { orbIds: [orbIds.one, orbIds.two] });
-  const one = await orbital.create({ orbId: orbIds.one, preparation, idleTimeoutMs: 30_000, env });
-  const two = await orbital.create({ orbId: orbIds.two, preparation, idleTimeoutMs: 30_000, env });
+  const one = await orbital.create({ orbId: orbIds.one, preparation, leaseWindowMs: 30_000, env });
+  const two = await orbital.create({ orbId: orbIds.two, preparation, leaseWindowMs: 30_000, env });
   assert.equal(one.image, prepared.reference);
   assert.equal(two.image, prepared.reference);
   assert.notEqual(one.resourceId, two.resourceId);
@@ -192,12 +192,12 @@ async function testPreparation(): Promise<void> {
   assert.equal(refreshed.reused, false);
   assert.notEqual(refreshed.reference, prepared.reference);
   ownArtifact(refreshed.reference);
-  const repeat = await orbital.create({ orbId: one.orbId, preparation, idleTimeoutMs: 30_000, env });
+  const repeat = await orbital.create({ orbId: one.orbId, preparation, leaseWindowMs: 30_000, env });
   assert.equal(repeat.resourceId, one.resourceId);
   record("refresh_preserved_existing_orb", { oldReference: prepared.reference,
     newReference: refreshed.reference, resourceId: repeat.resourceId });
   record("allocation_intent", { orbIds: [orbIds.refreshed] });
-  const fresh = await orbital.create({ orbId: orbIds.refreshed, preparation, idleTimeoutMs: 5_000, env });
+  const fresh = await orbital.create({ orbId: orbIds.refreshed, preparation, leaseWindowMs: 5_000, env });
   assert.equal(fresh.image, refreshed.reference);
 
   const workspace = await orbital.openWorkspace({ orbId: fresh.orbId, orbCwd: "/home/user" });
@@ -235,7 +235,7 @@ async function testPreparation(): Promise<void> {
   } finally { clearTimeout(runnerAbortTimer); }
 
   record("allocation_intent", { orbIds: [orbIds.failed] });
-  await assert.rejects(orbital.create({ orbId: orbIds.failed, preparation: "exit 23", idleTimeoutMs: 30_000, env }),
+  await assert.rejects(orbital.create({ orbId: orbIds.failed, preparation: "exit 23", leaseWindowMs: 30_000, env }),
     (cause: unknown) => {
       const error = cause as { code?: string; outcome?: string; evidence?: Record<string, unknown> };
       record("script_rejected", { code: error.code, outcome: error.outcome, evidence: error.evidence });

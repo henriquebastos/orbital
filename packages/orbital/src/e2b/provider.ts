@@ -20,7 +20,7 @@ import { validateEnvironment } from "../environment.js";
 
 const ORB_ID = "orbital_v2_orb_id";
 const IMAGE = "orbital_v2_image";
-const IDLE_MS = "orbital_v2_idle_timeout_ms";
+const LEASE_MS = "orbital_v2_lease_window_ms";
 const CREATION_INTENT = "orbital_v2_creation_intent";
 const JOB_ROOT = "/home/user/.orbital/jobs";
 const RUNNER = "/usr/local/bin/orbital-runner";
@@ -34,14 +34,17 @@ export interface E2BProviderConfig {
   requestTimeoutMs?: number;
 }
 
+// Pod receipts. A finished receipt carries every field, with null where the value is unknown.
 interface JobStatus {
-  state: "accepted" | "started" | "finished";
-  outcome?: "completed" | "cancelled" | "timed_out" | "failed";
+  state: "started" | "finished";
+  mode?: "ordinary" | "background" | null;
+  outcome?: "exited" | "cancelled" | "timed_out" | "failed";
   phase?: "pre_execution" | "execution";
-  errorCode?: string;
-  exitCode?: number;
-  pid?: number;
-  pgid?: number;
+  errorCode?: string | null;
+  exitCode?: number | null;
+  signal?: string | null;
+  pid?: number | null;
+  pgid?: number | null;
   scopeStopped?: boolean;
   renewal?: unknown;
 }
@@ -83,8 +86,8 @@ function sdkOptions(config: E2BProviderConfig) {
 function snapshot(info: SandboxInfo): OrbSnapshot {
   const orbId = info.metadata[ORB_ID];
   const image = info.metadata[IMAGE];
-  const idleTimeoutMs = Number(info.metadata[IDLE_MS]);
-  if (!orbId || !image || !Number.isSafeInteger(idleTimeoutMs) || idleTimeoutMs < 3) {
+  const leaseWindowMs = Number(info.metadata[LEASE_MS]);
+  if (!orbId || !image || !Number.isSafeInteger(leaseWindowMs) || leaseWindowMs < 3) {
     throw error("not_started", "invalid_metadata", "The E2B sandbox has invalid Orbital metadata.",
       { resourceId: info.sandboxId });
   }
@@ -110,7 +113,7 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
     resourceId: info.sandboxId,
     image,
     state: info.state === "paused" ? "sleeping" : "running",
-    idleTimeoutMs,
+    leaseWindowMs,
     sandboxDomain: info.sandboxDomain,
     resources: { cpuCount: info.cpuCount, memoryMB: info.memoryMB },
     ...(creationIntent === undefined ? {} : { creationIntent }),
@@ -119,9 +122,9 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
 
 function validateCreate(request: AllocationRequest): void {
   validateEnvironment(request.env);
-  if (!request.orbId || !request.image || !Number.isSafeInteger(request.idleTimeoutMs) ||
-    request.idleTimeoutMs < 3) {
-    throw error("not_started", "invalid_create", "Orb ID, image, and an idle timeout of at least 3 milliseconds are required.");
+  if (!request.orbId || !request.image || !Number.isSafeInteger(request.leaseWindowMs) ||
+    request.leaseWindowMs < 3) {
+    throw error("not_started", "invalid_create", "Orb ID, image, and a lease window of at least 3 milliseconds are required.");
   }
   if (!request.env?.E2B_API_KEY?.trim()) {
     throw error("not_started", "missing_renewal_key", "The instance environment must include a nonempty E2B_API_KEY for Orb renewal.");
@@ -183,10 +186,10 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
   }
   const options = sdkOptions(config);
 
-  // Connection resumes a sleeping allocation and renews its idle timeout, including for file reads.
+  // Connection resumes a sleeping allocation and renews its lease window, including for file reads.
   async function connectAndResume(orb: OrbSnapshot): Promise<Sandbox> {
     try {
-      return await Sandbox.connect(orb.resourceId, { ...options, timeoutMs: orb.idleTimeoutMs });
+      return await Sandbox.connect(orb.resourceId, { ...options, timeoutMs: orb.leaseWindowMs });
     } catch (cause) {
       if (cause instanceof SandboxNotFoundError) {
         throw error("not_started", "orb_missing", "The E2B sandbox is missing.", { resourceId: orb.resourceId });
@@ -234,7 +237,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     }
     if (prior) {
       try {
-        assertCreationMatches(prior, request.creationIntent ?? { image: request.image }, request.idleTimeoutMs);
+        assertCreationMatches(prior, request.creationIntent ?? { image: request.image }, request.leaseWindowMs);
       } catch (cause) {
         if (cause instanceof OrbitalError && cause.code === "conflict") {
           throw error("not_started", "orb_conflict", "The Orb ID already uses different creation settings.",
@@ -250,11 +253,11 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     try {
       sandbox = await Sandbox.create(request.image, {
         ...options,
-        timeoutMs: request.idleTimeoutMs,
+        timeoutMs: request.leaseWindowMs,
         metadata: {
           [ORB_ID]: request.orbId,
           [IMAGE]: request.image,
-          [IDLE_MS]: String(request.idleTimeoutMs),
+          [LEASE_MS]: String(request.leaseWindowMs),
           ...(request.creationIntent === undefined ? {} : { [CREATION_INTENT]: JSON.stringify(request.creationIntent) }),
         },
         envs: { ...request.env },
@@ -344,7 +347,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
         executionTimeoutMs: request.timeoutMs,
         env: request.env,
         sandboxId: orb.resourceId,
-        idleTimeoutMs: orb.idleTimeoutMs,
+        leaseWindowMs: orb.leaseWindowMs,
       }));
       await sandbox.files.rename(`${requestPath}.pending`, requestPath);
     } catch (cause) {
@@ -410,7 +413,9 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
         if (status?.state === "finished") {
           const renewal = renewalEvidence(status.renewal);
           const diagnostics = renewal === undefined ? {} : { renewal };
-          if (status.scopeStopped === false) {
+          // A background shell that exited leaves its service running. That is the expected scope state.
+          const serviceLeftRunning = request.mode === "background" && status.outcome === "exited";
+          if (status.scopeStopped === false && !serviceLeftRunning) {
             throw error("uncertain", "termination_unknown", "Managed process termination is not confirmed.",
               { jobId, resourceId: orb.resourceId, outputPath, partialOutput,
                 outcome: status.outcome, pid: status.pid, pgid: status.pgid, ...diagnostics });
@@ -437,7 +442,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           }
           const kind = status.outcome === "timed_out" ? "timed_out" :
             status.outcome === "cancelled" ? "cancelled" : "exited";
-          return { kind, jobId, stdout, stderr, outputPath, exitCode: status.exitCode };
+          return { kind, jobId, stdout, stderr, outputPath, exitCode: status.exitCode ?? undefined };
         }
         if (Date.now() - startedAt >= START_WAIT_MS && !startedReported) {
           throw error("uncertain", "admission_unknown", "The remote command has no start receipt.",

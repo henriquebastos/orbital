@@ -78,7 +78,7 @@ function startPi(directory: string, calls: Call[], mode: "json" | "rpc"): PiRun 
     cwd: directory,
     env: { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
       ORBITAL_PI_CALLS: JSON.stringify(calls), ORBITAL_IMAGE: image,
-      ORBITAL_IDLE_TIMEOUT_MS: "30000", ORBITAL_FORWARD_ENV: "E2B_API_KEY" },
+      ORBITAL_LEASE_WINDOW_MS: "30000", ORBITAL_FORWARD_ENV: "E2B_API_KEY" },
     stdio: [mode === "json" ? "ignore" : "pipe", "pipe", "pipe"],
   });
   const events: PiEvent[] = [];
@@ -158,7 +158,7 @@ async function passiveInfo(resourceId: string) {
 }
 
 async function findJob(orb: OrbSnapshot, token: string) {
-  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   const entries = await sandbox.files.list("/home/user/.orbital/jobs");
   for (const entry of entries) {
     const requestPath = `${entry.path}/request.json`;
@@ -166,7 +166,8 @@ async function findJob(orb: OrbSnapshot, token: string) {
     const request = JSON.parse(await sandbox.files.read(requestPath)) as { command?: string };
     if (!request.command?.includes(token)) continue;
     const status = JSON.parse(await sandbox.files.read(`${entry.path}/status.json`)) as Record<string, unknown>;
-    const combined = await sandbox.files.read(`${entry.path}/combined`);
+    // A job cancelled before launch never creates its output files.
+    const combined = await sandbox.files.exists(`${entry.path}/combined`) ? await sandbox.files.read(`${entry.path}/combined`) : "";
     return { jobId: entry.name, status, combined };
   }
   throw new Error(`No remote job matches token ${token}.`);
@@ -238,7 +239,7 @@ async function silentCase(directory: string, trace: Record<string, unknown>[], s
   const content = Buffer.from(await provider!.readFile(orb, `/home/user/${marker}`)).toString("utf8");
   assert.equal(content, "COMPLETE");
   const job = await findJob(orb, token);
-  assert.equal(job.status.outcome, "completed", JSON.stringify(job.status));
+  assert.equal(job.status.outcome, "exited", JSON.stringify(job.status));
   assert.equal(job.status.scopeStopped, true);
   assert.equal(job.status.exitCode, 0);
   trace.push({ event: "remote_effect", marker, content, jobId: job.jobId, status: job.status });
@@ -261,7 +262,7 @@ async function timeoutCase(directory: string, trace: Record<string, unknown>[], 
   assert.equal(job.status.outcome, "timed_out", JSON.stringify(job.status));
   assert.equal(job.status.scopeStopped, true);
   assert.match(job.combined, new RegExp(token));
-  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   assert.equal(await sandbox.files.exists(`/home/user/${marker}`), false);
   trace.push({ event: "remote_timeout_verified", markerAbsent: true, jobId: job.jobId, status: job.status });
   await verifyFollowUp(directory, orb, trace, "after_remote_timeout");
@@ -286,7 +287,7 @@ async function cancelCase(directory: string, trace: Record<string, unknown>[], s
   const job = await findJob(orb, token);
   assert.equal(job.status.outcome, "cancelled", JSON.stringify(job.status));
   assert.equal(job.status.scopeStopped, true);
-  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   assert.equal(await sandbox.files.exists(`/home/user/${marker}`), false);
   trace.push({ event: "rpc_cancel_verified", markerAbsent: true, jobId: job.jobId, status: job.status });
   await verifyFollowUp(directory, orb, trace, "after_rpc_cancellation");
@@ -294,7 +295,7 @@ async function cancelCase(directory: string, trace: Record<string, unknown>[], s
 
 async function earlyCase(_directory: string, trace: Record<string, unknown>[], setOwned: (orb: OrbSnapshot) => void) {
   const orbId = `orbital-lifetime-early-${runId}`;
-  const orb = await provider!.create({ orbId, image: image!, idleTimeoutMs: 30_000, env: { E2B_API_KEY: apiKey! } });
+  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! } });
   setOwned(orb);
   trace.push({ event: "created", orbId, resourceId: orb.resourceId });
   const token = `ORBITAL_EARLY_${randomUUID()}`;
@@ -309,18 +310,18 @@ async function earlyCase(_directory: string, trace: Record<string, unknown>[], s
   const job = await findJob(orb, token);
   assert.equal(job.status.outcome, "cancelled", JSON.stringify(job.status));
   assert.equal(job.status.scopeStopped, true);
-  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   assert.equal(await sandbox.files.exists(`/home/user/${marker}`), false);
-  trace.push({ event: "submitted_abort_verified", jobId: job.jobId, preSpawn: job.status.pid === undefined,
+  trace.push({ event: "submitted_abort_verified", jobId: job.jobId, preSpawn: job.status.pid === null,
     markerAbsent: true, status: job.status });
 }
 
 async function admissionCase(_directory: string, trace: Record<string, unknown>[], setOwned: (orb: OrbSnapshot) => void) {
   const orbId = `orbital-lifetime-admission-${runId}`;
-  const orb = await provider!.create({ orbId, image: image!, idleTimeoutMs: 30_000, env: { E2B_API_KEY: apiKey! } });
+  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! } });
   setOwned(orb);
   trace.push({ event: "created", orbId, resourceId: orb.resourceId });
-  const reference = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const reference = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   const target = new URL((reference as unknown as { envdApiUrl: string }).envdApiUrl);
   const token = `ORBITAL_ADMISSION_${randomUUID()}`;
   const marker = `lifetime-admission-${randomUUID()}.txt`;
@@ -415,10 +416,10 @@ async function admissionCase(_directory: string, trace: Record<string, unknown>[
   const job = await findJob(orb, token);
   assert.equal(job.status.outcome, "cancelled", JSON.stringify(job.status));
   assert.equal(job.status.scopeStopped, true);
-  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.idleTimeoutMs });
+  const sandbox = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });
   assert.equal(await sandbox.files.exists(`/home/user/${marker}`), false);
   trace.push({ event: "admission_cancel_verified", jobId: job.jobId,
-    preSpawn: job.status.pid === undefined, markerAbsent: true, status: job.status });
+    preSpawn: job.status.pid === null, markerAbsent: true, status: job.status });
 }
 
 async function runCase(name: CaseName): Promise<boolean> {
