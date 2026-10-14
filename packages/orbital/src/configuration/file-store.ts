@@ -100,7 +100,10 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
         : diagnostic.source === "userProject" ? { ...diagnostic, path: userProjectFilePath }
         : diagnostic.source === "project" ? { ...diagnostic, path: projectFilePath } : diagnostic),
     ];
-    invalidUser = current.diagnostics.some(diagnostic => diagnostic.source === "user");
+    // Only a file that cannot be rewritten safely blocks edits: unreadable, malformed, or not an
+    // object. An invalid value under one key stays as written while another key is edited.
+    const rewritable = typeof user === "object" && user !== null && !Array.isArray(user);
+    invalidUser = !rewritable || readDiagnostics.length > 0 || parsed.diagnostics.length > 0;
     revision = text;
     loaded = true;
     return structuredClone(current);
@@ -146,7 +149,7 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
     const parsedValue = remove ? undefined : options.schema[key].parseSaved(value);
     return serializeSettingsAccess(filePath, async () => {
       if (invalidUser) {
-        throw new Error(`Cannot edit invalid settings at ${filePath}.`);
+        throw new Error(`Cannot edit invalid settings at ${filePath}: the file is unreadable, malformed, or not an object.`);
       }
       if (await readText(filePath) !== revision) throw new Error(`Settings changed on disk at ${filePath}; refresh before editing.`);
       const next = { ...user as Record<string, unknown> };

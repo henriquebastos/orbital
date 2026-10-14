@@ -5,10 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { createImages, type ImageEffects, type ImageSeed } from "../../src/hangar/images/preparation.js";
+import { createImages, type ImageEffects, type ImageSeed } from "../../src/lifecycle/images/preparation.js";
 import { OrbitalError } from "../../src/operations.js";
 import { createE2BImages, createE2BImageEffects } from "../../src/e2b/images.js";
-import { ImageRecords, type ImageArtifact } from "../../src/hangar/images/records.js";
+import { ImageRecords, type ImageArtifact } from "../../src/lifecycle/images/records.js";
 
 const base: ImageArtifact = { reference: "base:one", templateId: "base", buildId: "one", kind: "template" };
 
@@ -23,7 +23,7 @@ async function fixture(run: (ctx: { effects: ImageEffects; records: ImageRecords
     async available(artifact) { calls.push(`available:${artifact.reference}`); return artifact.reference !== "deleted"; },
     async external(reference) { calls.push(`external:${reference}`); return { ...base, reference }; },
     async recipe() { calls.push("recipe"); return { sourceHash: "recipe-one", template: {}, cpuCount: 2, memoryMB: 1024 }; },
-    async findBuild(name) { calls.push(`find:${name}`); return undefined; },
+    async findReusableBuild(name) { calls.push(`find:${name}`); return undefined; },
     async submitBuild() { calls.push("build"); return base; },
     async waitForBuild() { calls.push("wait"); },
     async createSeed(_base, attemptId) {
@@ -67,7 +67,7 @@ test("a ready preparation is reused and a deleted artifact is rebuilt", async ()
 
 test("independent caches discover the same remote base without submitting a build", async () => fixture(async ({ effects, records, calls, directory }) => {
   const names: string[] = [];
-  effects.findBuild = async (name) => { names.push(name); return { artifact: base, status: "ready" }; };
+  effects.findReusableBuild = async (name) => { names.push(name); return { artifact: base, status: "ready" }; };
   const first = await createImages(effects, records).ensure({});
   const other = await createImages(effects, new ImageRecords(join(directory, "other-host"), effects.scope)).ensure({});
   assert.equal(first.reference, "base:one");
@@ -79,7 +79,7 @@ test("independent caches discover the same remote base without submitting a buil
 }));
 
 test("a pending remote build is recorded before waiting and is not submitted again", async () => fixture(async ({ effects, records, calls }) => {
-  effects.findBuild = async () => ({ artifact: base, status: "building" });
+  effects.findReusableBuild = async () => ({ artifact: base, status: "building" });
   effects.waitForBuild = async (artifact) => {
     assert.equal(artifact.buildId, "one");
     calls.push("wait");
@@ -95,7 +95,7 @@ test("a pending remote build is recorded before waiting and is not submitted aga
 }));
 
 test("lookup failures do not submit builds or publish ready records", async () => fixture(async ({ effects, records, calls }) => {
-  effects.findBuild = async () => { throw new OrbitalError("not_started", "image_lookup_failed", "Forbidden."); };
+  effects.findReusableBuild = async () => { throw new OrbitalError("not_started", "image_lookup_failed", "Forbidden."); };
   await assert.rejects(createImages(effects, records).ensure({}), { code: "image_lookup_failed" });
   assert.equal(calls.includes("build"), false);
   assert.deepEqual(await records.keys(), []);
@@ -106,7 +106,7 @@ test("simultaneous remote misses can build twice without overwriting either host
   const bothLookups = new Promise<void>(resolve => { release = resolve; });
   let lookups = 0;
   let builds = 0;
-  effects.findBuild = async () => {
+  effects.findReusableBuild = async () => {
     if (++lookups === 2) release();
     await bothLookups;
     return undefined;
@@ -125,7 +125,7 @@ test("simultaneous remote misses can build twice without overwriting either host
 }));
 
 test("a failed remote build permits a new submission; refresh bypasses discovery", async () => fixture(async ({ effects, records, calls }) => {
-  effects.findBuild = async () => { calls.push("find"); return { artifact: base, status: "error" }; };
+  effects.findReusableBuild = async () => { calls.push("find"); return { artifact: base, status: "error" }; };
   const images = createImages(effects, records);
   assert.equal((await images.ensure({})).reused, false);
   assert.equal((await images.ensure({ refresh: true })).reused, false);

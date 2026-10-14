@@ -6,6 +6,7 @@ import { Sandbox } from "e2b";
 import { OrbitalError } from "../../src/operations.js";
 import type { OrbSnapshot } from "../../src/orb.js";
 import { createE2BProvider } from "../../src/e2b/provider.js";
+import { createOrbital } from "../../src/lifecycle/index.js";
 
 const orb: OrbSnapshot = {
   orbId: "session-1",
@@ -56,7 +57,7 @@ test("runner renewal diagnostics reach callers without arbitrary guest fields", 
       async makeDir() {}, async write() {}, async rename() {},
       async exists(path: string) { return path.endsWith("/status.json"); },
       async read() { return JSON.stringify({ state: "finished", outcome: "failed", errorCode: "renewal_failed",
-        scopeStopped: true, renewal }); },
+        phase: "execution", scopeStopped: true, renewal }); },
     },
     commands: { async run() {} },
   }));
@@ -385,4 +386,14 @@ test("cancellation during the second provider lookup prevents allocation and wak
     server.closeAllConnections();
     await new Promise<void>(done => server.close(() => done()));
   }
+});
+
+test("the lifecycle admits the renewal key before any lookup or reuse", async () => {
+  const provider = createE2BProvider({ apiKey: "test-only" });
+  let resolved = 0;
+  provider.resolve = async () => { resolved++; return undefined; };
+  const orbital = createOrbital({ provider });
+  await assert.rejects(orbital.create({ orbId: "pi-session", image: "base", leaseWindowMs: 60_000, env: {} }),
+    { outcome: "not_started", code: "missing_renewal_key" });
+  assert.equal(resolved, 0);
 });

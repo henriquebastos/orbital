@@ -5,10 +5,8 @@ import type { Images, PrepareRequest, PreparedImage } from "./types.js";
 import { normalizeImageRequest } from "../creation.js";
 import { ImageRecords, type ImageArtifact, type ImageAttempt, type ReadyImageRecord } from "./records.js";
 
-export const PREPARATION_CONTRACT_VERSION = 1;
-
-// Preserve these fields in persisted cache keys. Actual resources belong to the resolved base identity.
-const preparationKeyCompatibilityFields = [2, 1024] as const;
+// Version 2 dropped the resource placeholders from the preparation key. Resources belong to the base.
+export const PREPARATION_CONTRACT_VERSION = 2;
 
 export interface BaseRecipe {
   sourceHash: string;
@@ -42,7 +40,8 @@ export interface ImageEffects {
   available(artifact: ImageArtifact): Promise<boolean>;
   external(reference: string): Promise<ImageArtifact>;
   recipe(): Promise<BaseRecipe>;
-  findBuild(name: string): Promise<ImageBuild | undefined>;
+  /** The most reusable visible build of a named image: ready first, then pending, then failed. */
+  findReusableBuild(name: string): Promise<ImageBuild | undefined>;
   submitBuild(name: string, recipe: BaseRecipe, observer?: Observer): Promise<ImageArtifact>;
   waitForBuild(artifact: ImageArtifact, observer?: Observer): Promise<void>;
   createSeed(base: ImageArtifact, attemptId: string): Promise<ImageSeed>;
@@ -102,9 +101,10 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     }
   }
 
+  // A ready record from another contract version is not reused, even if its artifact exists.
   async function findAvailableReadyRecord(recordKey: string): Promise<ReadyImageRecord | undefined> {
     const record = await records.ready(recordKey);
-    if (!record) return undefined;
+    if (!record || record.contractVersion !== PREPARATION_CONTRACT_VERSION) return undefined;
     if (await effects.available(record.artifact)) return record;
     return undefined;
   }
@@ -132,7 +132,8 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     return artifact;
   }
 
-  async function resolveBaseImage(request: PrepareRequest, observer?: Observer): Promise<{ artifact: ImageArtifact; reused: boolean }> {
+  // The resolved base, with the ImageRecords key of an owned base. An external image has no record.
+  async function resolveBaseImage(request: PrepareRequest, observer?: Observer): Promise<{ artifact: ImageArtifact; reused: boolean; key?: string }> {
     if (request.image !== undefined) {
       observer?.onProgress?.({ phase: "resolving_image" });
       const artifact = await effects.external(request.image);
@@ -146,16 +147,16 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     const reuseBase = !request.refresh || request.preparation !== undefined;
     if (reuseBase) {
       const found = await findAvailableReadyRecord(key);
-      if (found) return { artifact: found.artifact, reused: true };
+      if (found) return { artifact: found.artifact, reused: true, key };
     }
     const recovered = await recoverRecordedArtifact(key, recipe.sourceHash, undefined, observer);
-    if (recovered) return { artifact: recovered, reused: true };
+    if (recovered) return { artifact: recovered, reused: true, key };
     unresolved(await records.attempt(key));
     cancelled(observer);
     const attempt: ImageAttempt = { version: 1, key, scope: effects.scope, attemptId: randomUUID(),
       state: "active", stage: "build_intent", updatedAt: new Date().toISOString() };
     const name = baseImageName(recipe.sourceHash);
-    const existing = reuseBase ? await effects.findBuild(name) : undefined;
+    const existing = reuseBase ? await effects.findReusableBuild(name) : undefined;
     attempt.generationName = name;
     await records.writeAttempt(attempt);
     const reuse = existing !== undefined && existing.status !== "error";
@@ -173,7 +174,7 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
         createdAt: new Date().toISOString() };
       await records.writeReady(record);
       await saveAttempt(attempt, "ready", { state: "ready" });
-      return { artifact, reused: reuse };
+      return { artifact, reused: reuse, key };
     } catch (cause) {
       const error = issue(cause, attempt.stage, attempt);
       await saveAttempt(attempt, attempt.stage, { state: error.outcome === "uncertain" ||
@@ -183,7 +184,7 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     }
   }
 
-  function resolveBaseInQueue(request: PrepareRequest, observer?: Observer): Promise<{ artifact: ImageArtifact; reused: boolean }> {
+  function resolveBaseInQueue(request: PrepareRequest, observer?: Observer): Promise<{ artifact: ImageArtifact; reused: boolean; key?: string }> {
     const key = digest(["base_queue", request.image]);
     return queue(baseResolutionQueue, key, () => resolveBaseImage(request, observer));
   }
@@ -203,12 +204,12 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     const preparation = normalized.preparation;
     if (preparation === undefined) {
       return { reference: resolvedBase.reference, baseReference: resolvedBase.reference,
-        cacheKey: digest(["base_result", effects.scope, resolvedBase.templateId, resolvedBase.buildId]),
+        cacheKey: baseResult.key ?? digest(["external", effects.scope, resolvedBase.templateId, resolvedBase.buildId]),
         reused: baseResult.reused };
     }
     const scriptHash = createHash("sha256").update(preparation, "utf8").digest("hex");
     const key = digest(["preparation", effects.scope, resolvedBase.templateId, resolvedBase.buildId,
-      resolvedBase.reference, scriptHash, PREPARATION_CONTRACT_VERSION, ...preparationKeyCompatibilityFields]);
+      resolvedBase.reference, scriptHash, PREPARATION_CONTRACT_VERSION]);
     if (!refresh) {
       const found = await findAvailableReadyRecord(key);
       if (found) {

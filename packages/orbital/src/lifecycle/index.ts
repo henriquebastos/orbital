@@ -27,6 +27,8 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
     async create(request: CreateRequest, observer: Observer = {}) {
       checkCancellation(observer);
       validateEnvironment(request.env);
+      // Provider admission (for E2B, the renewal key) fails before lookup, reuse, or image work.
+      configuration.provider.admitEnvironment?.(request.env);
       request = { ...request, env: request.env === undefined ? undefined : { ...request.env } };
       requireId(request.orbId);
       if (!Number.isSafeInteger(request.leaseWindowMs) || request.leaseWindowMs < 3) {

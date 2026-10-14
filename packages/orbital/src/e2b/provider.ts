@@ -15,7 +15,7 @@ import { OrbitalError, type Observer } from "../operations.js";
 import type { AllocationRequest, Provider } from "../provider.js";
 import type { CreationIntent, OrbSnapshot } from "../orb.js";
 import type { ExecRequest, ExecResult } from "../workspace.js";
-import { assertCreationMatches } from "../hangar/creation.js";
+import { assertCreationMatches } from "../lifecycle/creation.js";
 import { validateEnvironment } from "../environment.js";
 
 const ORB_ID = "orbital_v2_orb_id";
@@ -120,15 +120,22 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
   };
 }
 
+// E2B admission: the instance environment must carry the renewal key. The lifecycle checks this
+// before lookup through Provider.admitEnvironment; direct create checks it again.
+function admitEnvironment(env: Record<string, string> | undefined): void {
+  validateEnvironment(env);
+  if (!env?.E2B_API_KEY?.trim()) {
+    throw error("not_started", "missing_renewal_key", "The instance environment must include a nonempty E2B_API_KEY for Orb renewal.");
+  }
+}
+
 function validateCreate(request: AllocationRequest): void {
   validateEnvironment(request.env);
   if (!request.orbId || !request.image || !Number.isSafeInteger(request.leaseWindowMs) ||
     request.leaseWindowMs < 3) {
     throw error("not_started", "invalid_create", "Orb ID, image, and a lease window of at least 3 milliseconds are required.");
   }
-  if (!request.env?.E2B_API_KEY?.trim()) {
-    throw error("not_started", "missing_renewal_key", "The instance environment must include a nonempty E2B_API_KEY for Orb renewal.");
-  }
+  admitEnvironment(request.env);
 }
 
 function validatePort(port: number): void {
@@ -411,6 +418,13 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           observer?.onProgress?.({ phase: "started", orbId: orb.orbId });
         }
         if (status?.state === "finished") {
+          // A finished receipt must carry a known outcome, a known phase, and a scope observation.
+          if (!["exited", "cancelled", "timed_out", "failed"].includes(status.outcome as string)
+            || !["pre_execution", "execution"].includes(status.phase as string)
+            || typeof status.scopeStopped !== "boolean") {
+            throw error("uncertain", "receipt_invalid", "The remote runner receipt is incomplete or has an unknown outcome.",
+              { jobId, resourceId: orb.resourceId, outputPath, partialOutput, outcome: status.outcome, phase: status.phase });
+          }
           const renewal = renewalEvidence(status.renewal);
           const diagnostics = renewal === undefined ? {} : { renewal };
           // A background shell that exited leaves its service running. That is the expected scope state.
@@ -455,5 +469,5 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     }
   }
 
-  return { resolve, create, resume, delete: remove, url, exec, readFile, writeFile, stat };
+  return { admitEnvironment, resolve, create, resume, delete: remove, url, exec, readFile, writeFile, stat };
 }

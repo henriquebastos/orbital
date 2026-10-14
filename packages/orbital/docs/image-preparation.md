@@ -65,7 +65,7 @@ Lookup, submission, and waiting do not require a cache directory. Preparation se
 | `orbitalRecipe()` | Read the bundled recipe and payload and return its content hash and build inputs. No network calls. |
 | `hashBaseRecipe(templateJSON, resources, files)` | Hash explicit inputs without reading files or contacting E2B. File order and exact bytes matter. |
 | `baseImageName(sourceHash)` | Derive the stable `orbital-base-{sourceHash}` name. |
-| `effects.findBuild(name)` | Read remote state. Return a ready build, otherwise a pending or failed build. Only a missing alias returns `undefined`. |
+| `effects.findReusableBuild(name)` | Read remote state. Return a ready build, otherwise a pending or failed build. Only a missing alias returns `undefined`. |
 | `effects.submitBuild(name, recipe, observer?)` | Submit one build and return its identity without waiting for completion. |
 | `effects.waitForBuild(artifact, observer?)` | Poll that exact build. Never submit or delete an image. |
 | `effects.external(reference)` | Resolve an explicit reference to an exact ready build. |
@@ -165,12 +165,13 @@ Default-image creation and `prepare()` require the Images adapter.
 
 | Module | Responsibility |
 | --- | --- |
-| `hangar/creation.ts` | Validate image inputs and compare creation intent. |
-| `hangar/index.ts` | Resolve existing Orbs before image work and allocate after preparation. |
-| `hangar/images/preparation.ts` | Order cache lookup, preparation, publication, and cleanup. |
+| `lifecycle/creation.ts` | Validate image inputs and compare creation intent. |
+| `lifecycle/index.ts` | Resolve existing Orbs before image work and allocate after preparation. |
+| `lifecycle/images/preparation.ts` | Order cache lookup, preparation, publication, and cleanup. |
+| `e2b/image-registry.ts` | Resolve snapshot, alias, tag, and build identity to one pinned build. |
 | `e2b/images.ts` | Build bases, execute preparation seeds, and capture images. |
-| `hangar/images/records.ts` | Store attempt and ready receipts atomically. |
-| `hangar/images/recipe.ts` | Define the owned base from the bundled Pod files. |
+| `lifecycle/images/records.ts` | Store attempt and ready receipts atomically. |
+| `e2b/recipe.ts` | Define the owned base from the bundled Pod files. |
 | `cli/image.ts` | Read explicit inputs and call the shared preparation API. |
 | `e2b/provider.ts` | Operate live Orbs and execute ordinary workspace jobs. |
 
@@ -183,14 +184,14 @@ Image failures report `not_started`, `failed`, or `uncertain`, with a stage and 
 A known script failure publishes no image. A failed refresh preserves the previous ready image.
 If final Orb allocation fails, the prepared image remains available.
 
-The cache keeps current records, per-attempt history, and script logs. Raw provider credentials are not stored in those records.
+The cache keeps current records, the latest state of each attempt by ID, and script logs. Raw provider credentials are not stored in those records.
 Cache scope includes a fingerprint of the credential and the provider endpoint. Credential rotation starts a separate local cache scope.
 Remote base discovery permits reuse across installations and credentials with access to the same E2B image.
 Prepared-script images still use the local cache and are not discovered across hosts.
 
 An interrupted attempt with a recorded artifact can recover after a read-only check confirms that the artifact is ready.
 An uncertain attempt without a recorded artifact stops automatic preparation. Its generation name and any known seed ID remain available for investigation.
-This version has no automatic reconciliation for that case. Preserve the attempt history when investigating it.
+This version has no automatic reconciliation for that case. Preserve the attempt records when investigating it.
 Unconfirmed seed deletion appears in the attempt record and the `seed_cleanup_unknown` progress event.
 
 Requests within one image manager serialize matching cache work. Separate processes and hosts have no shared coordination guarantee.

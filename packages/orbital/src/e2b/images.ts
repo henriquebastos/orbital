@@ -4,23 +4,25 @@ import { join } from "node:path";
 
 import {
   AuthenticationError,
-  BuildError,
   CommandExitError,
   InvalidArgumentError,
   NotFoundError,
   RateLimitError,
   Sandbox,
-  SandboxError,
   Template,
 } from "e2b";
 
-import { createImages, type BaseRecipe, type ImageBuild, type ImageEffects, type ImageSeed } from "../hangar/images/preparation.js";
+import { createImages, type BaseRecipe, type ImageBuild, type ImageEffects, type ImageSeed } from "../lifecycle/images/preparation.js";
 import { OrbitalError, type Observer } from "../operations.js";
-import type { Images } from "../hangar/images/types.js";
-import { orbitalRecipe, runtimeCheckCommand } from "../hangar/images/recipe.js";
-import { ImageRecords, type ImageArtifact } from "../hangar/images/records.js";
+import type { Images } from "../lifecycle/images/types.js";
+import { orbitalRecipe, runtimeCheckCommand } from "../e2b/recipe.js";
+import { ImageRecords, type ImageArtifact } from "../lifecycle/images/records.js";
 import type { E2BProviderConfig } from "./provider.js";
 import type { ImageResources } from "../configuration/settings.js";
+import { createImageRegistry, imageError, sdkOptions } from "./image-registry.js";
+
+// E2B image effects: identity lookups through the registry, base builds, and preparation seeds.
+// The preparation policy (cache, attempts, publication) lives in lifecycle/images/preparation.
 
 type ResourceSelection = Partial<ImageResources> | (() => Partial<ImageResources> | Promise<Partial<ImageResources>>);
 
@@ -28,17 +30,7 @@ const SEED_LEASE_MS = 30 * 60_000;
 const SCRIPT_DEADLINE_MS = 20 * 60_000;
 const CHECK_DEADLINE_MS = 2 * 60_000;
 
-function imageError(outcome: "not_started" | "failed" | "uncertain", code: string, message: string,
-  evidence: Record<string, unknown> = {}): OrbitalError {
-  return new OrbitalError(outcome, code, message, evidence);
-}
-
-function sdkOptions(config: E2BProviderConfig) {
-  const domain = config.domain ?? "e2b.app";
-  return { apiKey: config.apiKey, domain, apiUrl: config.apiUrl ?? `https://api.${domain}`,
-    requestTimeoutMs: config.requestTimeoutMs, retries: 0 };
-}
-
+// The cache scope separates records by API endpoint and credential, without storing the key.
 function scopeFor(config: E2BProviderConfig): string {
   const options = sdkOptions(config);
   return createHash("sha256").update(JSON.stringify([
@@ -47,218 +39,24 @@ function scopeFor(config: E2BProviderConfig): string {
   ])).digest("hex");
 }
 
-function referenceParts(reference: string): { name: string; tag: string } {
-  const colon = reference.lastIndexOf(":");
-  const slash = reference.lastIndexOf("/");
-  if (colon > slash) return { name: reference.slice(0, colon), tag: reference.slice(colon + 1) };
-  return { name: reference, tag: "default" };
-}
-
+// The SDK rejected the request outright. Anything else leaves the remote outcome unknown.
 function rejected(cause: unknown): boolean {
   return cause instanceof AuthenticationError || cause instanceof InvalidArgumentError ||
     cause instanceof NotFoundError || cause instanceof RateLimitError;
-}
-
-function missing(cause: unknown): boolean {
-  if (cause instanceof SandboxError) return cause.statusCode === 404;
-  // SDK 2.51 wraps build-status HTTP errors in BuildError without statusCode.
-  return cause instanceof BuildError && /^404: /.test(cause.message);
-}
-
-function statusCode(cause: unknown): number | undefined {
-  if (cause instanceof SandboxError) return cause.statusCode;
-  if (cause instanceof BuildError) {
-    const match = /^(\d{3}): /.exec(cause.message);
-    if (match) return Number(match[1]);
-  }
-  return undefined;
 }
 
 export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirectory?: string; resources?: ResourceSelection }): ImageEffects {
   if (!config.apiKey) throw imageError("not_started", "missing_api_key", "E2B_API_KEY is required.");
   const options = sdkOptions(config);
   const scope = scopeFor(config);
-
-  async function apiGet(path: string): Promise<{ data: unknown; nextToken?: string } | undefined> {
-    let response: Response;
-    try {
-      response = await fetch(`${options.apiUrl}${path}`, {
-        headers: { "X-API-KEY": config.apiKey }, signal: AbortSignal.timeout(config.requestTimeoutMs ?? 60_000),
-      });
-    } catch (cause) {
-      throw imageError("not_started", "image_lookup_failed", "The E2B image lookup failed.",
-        { cause: cause instanceof Error ? cause.name : "unknown" });
-    }
-    if (response.status === 404) return undefined;
-    if (!response.ok) throw imageError("not_started", "image_lookup_failed", "E2B rejected the image lookup.",
-      { statusCode: response.status });
-    let data: unknown;
-    try { data = await response.json(); }
-    catch (cause) {
-      throw imageError("not_started", "image_lookup_failed", "The E2B image lookup returned invalid data.",
-        { statusCode: response.status, cause: cause instanceof Error ? cause.name : "unknown" });
-    }
-    return { data, nextToken: response.headers.get("X-Next-Token") ?? undefined };
-  }
-
-  async function regularBuild(name: string, buildId: string): Promise<{ templateId: string; status: string } | undefined> {
-    let templateId = name;
-    let page = await apiGet(`/templates/${encodeURIComponent(templateId)}?limit=100`);
-    if (!page) {
-      const alias = await apiGet(`/templates/aliases/${encodeURIComponent(name)}`);
-      if (!alias) return undefined;
-      if (!alias.data || typeof alias.data !== "object" ||
-        typeof (alias.data as { templateID?: unknown }).templateID !== "string") {
-        throw imageError("not_started", "image_lookup_failed", "The E2B image alias has invalid data.");
-      }
-      templateId = (alias.data as { templateID: string }).templateID;
-      page = await apiGet(`/templates/${encodeURIComponent(templateId)}?limit=100`);
-      if (!page) return undefined;
-    }
-    for (let count = 0; count < 100; count++) {
-      const data = page.data as { templateID?: unknown; builds?: Array<{ buildID?: unknown; status?: unknown }> };
-      if (!data || typeof data !== "object" || data.templateID !== templateId || !Array.isArray(data.builds)) {
-        throw imageError("not_started", "image_lookup_failed", "The E2B image build list has invalid data.");
-      }
-      const build = data.builds.find((item) => item.buildID === buildId);
-      if (build) {
-        if (typeof build.status !== "string") throw imageError("not_started", "image_lookup_failed", "The E2B image build has invalid status.");
-        return { templateId, status: build.status };
-      }
-      if (!page.nextToken) return undefined;
-      page = await apiGet(`/templates/${encodeURIComponent(templateId)}?limit=100&nextToken=${encodeURIComponent(page.nextToken)}`);
-      if (!page) return undefined;
-    }
-    throw imageError("not_started", "image_lookup_failed", "The E2B image build list exceeded the page limit.");
-  }
-
-  async function snapshotReference(snapshotId: string): Promise<string | undefined> {
-    try {
-      const paginator = Sandbox.listSnapshots({ ...options, name: snapshotId, limit: 20 });
-      while (paginator.hasNext) {
-        const snapshots = await paginator.nextItems();
-        const match = snapshots.find((snapshot) => snapshot.snapshotId === snapshotId ||
-          !snapshotId.includes("/") && snapshot.snapshotId.endsWith(`/${snapshotId}`));
-        if (match) return match.snapshotId;
-      }
-      return undefined;
-    } catch (cause) {
-      if (missing(cause)) return undefined;
-      throw imageError("not_started", "image_lookup_failed", "The captured image could not be inspected.",
-        { reference: snapshotId, cause: cause instanceof Error ? cause.name : "unknown", statusCode: statusCode(cause) });
-    }
-  }
-
-  async function resolveImageArtifact(reference: string): Promise<ImageArtifact> {
-    const { name, tag } = referenceParts(reference);
-    const snapshotId = `${name}:default`;
-    const foundSnapshotId = await snapshotReference(snapshotId);
-    if (foundSnapshotId) {
-      const canonicalName = referenceParts(foundSnapshotId).name;
-      let tags: Awaited<ReturnType<typeof Template.getTags>>;
-      try { tags = await Template.getTags(canonicalName, options); }
-      catch (cause) {
-        if (missing(cause)) throw imageError("not_started", "image_missing", "The captured image tag does not exist.", { reference });
-        throw imageError("not_started", "image_lookup_failed", "The captured image tag could not be inspected.",
-          { reference, cause: cause instanceof Error ? cause.name : "unknown", statusCode: statusCode(cause) });
-      }
-      const match = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(tag)
-        ? tags.find((item) => item.buildId === tag)
-        : tags.find((item) => item.tag === tag);
-      if (!match) throw imageError("not_started", "image_unavailable", "The captured image build is not accessible.", { reference });
-      return { reference: `${canonicalName}:${match.buildId}`, templateId: canonicalName, buildId: match.buildId,
-        kind: "snapshot", snapshotId: foundSnapshotId };
-    }
-    if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(tag)) {
-      const build = await regularBuild(name, tag);
-      if (!build) throw imageError("not_started", "image_missing", "The requested E2B image build does not exist.", { reference });
-      if (build.status !== "ready") throw imageError("not_started", "image_unavailable", "The requested E2B image is not ready.",
-        { reference, status: build.status });
-      return { reference, templateId: build.templateId, buildId: tag, kind: "template" };
-    }
-    let tags: Awaited<ReturnType<typeof Template.getTags>>;
-    try {
-      tags = await Template.getTags(name, options);
-    } catch (cause) {
-      if (missing(cause)) {
-        throw imageError("not_started", "image_missing", "The requested E2B image does not exist.", { reference });
-      }
-      throw imageError("not_started", "image_lookup_failed", "The requested E2B image could not be inspected.",
-        { reference, cause: cause instanceof Error ? cause.name : "unknown", statusCode: statusCode(cause) });
-    }
-    const match = tags.find((item) => item.tag === tag);
-    if (!match) throw imageError("not_started", "image_missing", "The requested E2B image tag does not exist.", { reference });
-    const build = await regularBuild(name, match.buildId);
-    if (!build) throw imageError("not_started", "image_missing", "The requested E2B image build does not exist.", { reference });
-    if (build.status !== "ready") throw imageError("not_started", "image_unavailable", "The requested E2B image is not ready.",
-      { reference, status: build.status });
-    return { reference: `${name}:${match.buildId}`, templateId: build.templateId, buildId: match.buildId, kind: "template" };
-  }
-
-  async function available(artifact: ImageArtifact): Promise<boolean> {
-    if (artifact.kind === "snapshot") {
-      const snapshotId = artifact.snapshotId ?? `${referenceParts(artifact.reference).name}:default`;
-      if (!await snapshotReference(snapshotId)) return false;
-      const current = await resolveImageArtifact(artifact.reference);
-      return current.kind === "snapshot" && current.buildId === artifact.buildId;
-    }
-    try {
-      const build = await regularBuild(artifact.templateId, artifact.buildId!);
-      if (!build) return false;
-      if (build.status !== "ready") {
-        throw imageError("not_started", "image_not_ready", "The exact image build is not ready.",
-          { reference: artifact.reference, status: build.status });
-      }
-      return true;
-    } catch (cause) {
-      if (missing(cause)) return false;
-      if (cause instanceof OrbitalError) throw cause;
-      throw imageError("not_started", "image_lookup_failed", "The exact image build could not be inspected.",
-        { reference: artifact.reference, cause: cause instanceof Error ? cause.name : "unknown", statusCode: statusCode(cause) });
-    }
-  }
+  const registry = createImageRegistry(config);
 
   return {
     scope,
-    available,
-    external: resolveImageArtifact,
+    available: registry.available,
+    external: registry.resolve,
+    findReusableBuild: registry.findReusableBuild,
     recipe: async () => orbitalRecipe(typeof config.resources === "function" ? await config.resources() : config.resources),
-    async findBuild(name): Promise<ImageBuild | undefined> {
-      const alias = await apiGet(`/templates/aliases/${encodeURIComponent(name)}`);
-      if (!alias) return undefined;
-      const templateId = (alias.data as { templateID?: unknown })?.templateID;
-      if (typeof templateId !== "string" || !templateId) {
-        throw imageError("not_started", "image_lookup_failed", "The E2B image alias has invalid data.");
-      }
-      let nextToken: string | undefined;
-      let pending: ImageBuild | undefined;
-      let failed: ImageBuild | undefined;
-      for (let count = 0; count < 100; count++) {
-        const page = await apiGet(`/templates/${encodeURIComponent(templateId)}?limit=100${nextToken ? `&nextToken=${encodeURIComponent(nextToken)}` : ""}`);
-        if (!page) throw imageError("not_started", "image_lookup_failed", "The E2B image disappeared during lookup.");
-        const data = page.data as { templateID?: unknown; builds?: Array<{ buildID?: unknown; status?: unknown }> };
-        if (!data || data.templateID !== templateId || !Array.isArray(data.builds)) {
-          throw imageError("not_started", "image_lookup_failed", "The E2B image build list has invalid data.");
-        }
-        for (const build of data.builds) {
-          if (!build || typeof build.buildID !== "string" || !build.buildID ||
-            !["waiting", "building", "ready", "error"].includes(build.status as string)) {
-            throw imageError("not_started", "image_lookup_failed", "The E2B image build has invalid data.");
-          }
-          const result: ImageBuild = { artifact: { reference: `${name}:${build.buildID}`, templateId,
-            buildId: build.buildID, kind: "template" }, status: build.status as ImageBuild["status"] };
-          if (result.status === "ready") return result;
-          if (result.status === "error") failed ??= result;
-          else pending ??= result;
-        }
-        nextToken = page.nextToken;
-        if (!nextToken) {
-          if (pending || failed) return pending ?? failed;
-          throw imageError("not_started", "image_lookup_failed", "The E2B image has no visible builds.");
-        }
-      }
-      throw imageError("not_started", "image_lookup_failed", "The E2B image build list exceeded the page limit.");
-    },
     async submitBuild(name: string, recipe: BaseRecipe, observer?: Observer): Promise<ImageArtifact> {
       if (observer?.signal?.aborted) throw imageError("not_started", "cancelled", "Base build was cancelled before submission.");
       let result: Awaited<ReturnType<typeof Template.buildInBackground>>;
@@ -277,7 +75,6 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
     },
     async waitForBuild(artifact, observer): Promise<void> {
       const { templateId, buildId } = artifact;
-      if (!buildId) throw imageError("not_started", "invalid_build", "A build ID is required.");
       const startedAt = Date.now();
       while (true) {
         if (observer?.signal?.aborted) throw imageError("uncertain", "base_build_cancelled", "The base build remains active after cancellation.",
@@ -404,9 +201,13 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
           }
         },
         async capture(name) {
+          // The script and its exit receipt are preparation scaffolding, not image content.
+          // Removal is best effort: a leftover file does not change the captured runtime.
+          await sandbox.commands.run(`rm -f -- ${scriptPath} ${receiptPath}`, { user: "user", timeoutMs: 30_000 })
+            .catch(() => undefined);
           try {
             const snapshot = await Sandbox.createSnapshot(sandbox.sandboxId, { ...options, name });
-            return resolveImageArtifact(snapshot.snapshotId);
+            return registry.resolve(snapshot.snapshotId);
           } catch (cause) {
             if (rejected(cause)) throw imageError("failed", "capture_rejected", "E2B rejected the image capture.",
               { seedId: sandbox.sandboxId, name, cause: (cause as Error).name });
@@ -414,6 +215,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
               { seedId: sandbox.sandboxId, name, cause: cause instanceof Error ? cause.name : "unknown" });
           }
         },
+        // A false result means the seed was already gone, which is the wanted end state.
         async delete() {
           try { await Sandbox.kill(sandbox.sandboxId, options); }
           catch (cause) {

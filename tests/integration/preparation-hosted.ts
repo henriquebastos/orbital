@@ -15,7 +15,7 @@ import { saveReceipt } from "../support/receipts.js";
 import { createOrbitalConfiguration } from "@henriquebastosnet/orbital/settings/node";
 import type { createOrbital as createOrbitalType, createE2BImages as createE2BImagesType,
   createE2BProvider as createE2BProviderType } from "@henriquebastosnet/orbital";
-import type { orbitalRecipe as orbitalRecipeType } from "../../packages/orbital/src/hangar/images/recipe.js";
+import type { orbitalRecipe as orbitalRecipeType } from "../../packages/orbital/src/e2b/recipe.js";
 
 const run = promisify(execFile);
 const root = resolve(import.meta.dirname, "../..");
@@ -83,7 +83,7 @@ async function installPackage(): Promise<Installed> {
   const archive = JSON.parse(packed.stdout) as Array<{ filename: string; files: Array<{ path: string }> }>;
   assert.equal(archive.length, 1);
   const paths = new Set(archive[0]!.files.map((file) => file.path));
-  for (const path of ["dist/index.js", "dist/hangar/images/recipe.js", "dist/cli/image.js",
+  for (const path of ["dist/index.js", "dist/e2b/recipe.js", "dist/cli/image.js",
     "guest/pod/package.json", "guest/pod/package-lock.json", "guest/pod/orbital-runner.mjs", "guest/pod/renew.mjs"]) {
     assert.ok(paths.has(path), `The package omits ${path}.`);
   }
@@ -114,7 +114,7 @@ async function installPackage(): Promise<Installed> {
   const { Sandbox, Template } = await import(pathToFileURL(e2bPath).href) as {
     Sandbox: SandboxApi; Template: typeof TemplateClass;
   };
-  const recipePath = join(packageDirectory, "dist/hangar/images/recipe.js");
+  const recipePath = join(packageDirectory, "dist/e2b/recipe.js");
   const { orbitalRecipe } = await import(pathToFileURL(recipePath).href) as { orbitalRecipe: typeof orbitalRecipeType };
   const recipe = await orbitalRecipe();
   sourceHash = recipe.sourceHash;

@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 import { Template } from "e2b";
 
-import { orbitalSettingsSchema, type ImageResources } from "../../configuration/settings.js";
+import { orbitalSettingsSchema, type ImageResources } from "../configuration/settings.js";
 const systemPackagesCommand = "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ripgrep fd-find gh && ln -sf /usr/bin/fdfind /usr/local/bin/fd && rm -rf /var/lib/apt/lists/*";
 const installCommand = "cd /opt/orbital && npm ci --omit=dev";
 const linkCommand = "ln -sf /opt/orbital/node_modules/node/bin/node /usr/local/bin/node && ln -sf /opt/orbital/pod/orbital-runner.mjs /usr/local/bin/orbital-runner && chmod 755 /opt/orbital/pod/orbital-runner.mjs && chown -R user:user /home/user/.orbital";
@@ -19,7 +19,7 @@ const payloadPaths = [
 ] as const;
 
 async function packageRoot(): Promise<string> {
-  const root = resolve(import.meta.dirname, "../../..");
+  const root = resolve(import.meta.dirname, "../..");
   await readFile(resolve(root, "guest/pod/package-lock.json"));
   return root;
 }

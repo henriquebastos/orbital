@@ -2,7 +2,7 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { createOrbital } from "../hangar/index.js";
+import { createOrbital } from "../lifecycle/index.js";
 import { createE2BImages } from "../e2b/images.js";
 import { createE2BProvider } from "../e2b/provider.js";
 import { OrbitalError } from "../operations.js";
@@ -14,7 +14,7 @@ async function main(): Promise<void> {
     "cache-directory": { type: "string" }, help: { type: "boolean", short: "h" },
   } });
   if (values.help) {
-    process.stdout.write("Usage: orbital-image [--image REFERENCE] [--preparation FILE] [--refresh] [--cache-directory DIRECTORY]\n\nPrepare the Orbital base and selected project directory. --preparation replaces project preparation with explicit Bash source. Builds run on E2B. E2B_API_KEY is required.\n");
+    process.stdout.write("Usage: orbital-image [--image REFERENCE] [--preparation FILE] [--refresh] [--cache-directory DIRECTORY]\n\nPrepare the Orbital base and the selected project settings directory (<cwd>/.orbital, or the private directory for this checkout name), not the checkout itself. --preparation replaces project preparation with explicit Bash source. Builds run on E2B. E2B_API_KEY is required.\n");
     return;
   }
   const configuration = createOrbitalConfiguration();

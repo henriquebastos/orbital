@@ -35,18 +35,18 @@ test("remote lookup prefers ready builds across pages and distinguishes absence 
     assert.ok(address && typeof address !== "string");
     const effects = createE2BImageEffects({ apiKey: "test-only", cacheDirectory: directory,
       apiUrl: `http://127.0.0.1:${address.port}` });
-    const found = await effects.findBuild("orbital-base-hash");
+    const found = await effects.findReusableBuild("orbital-base-hash");
     assert.deepEqual(found, { status: "ready", artifact: { reference: `orbital-base-hash:${buildId}`,
       templateId: "raw-id", buildId, kind: "template" } });
     mode = "pending";
-    assert.equal((await effects.findBuild("orbital-base-hash"))?.status, "building");
+    assert.equal((await effects.findReusableBuild("orbital-base-hash"))?.status, "building");
     for (mode of ["empty", "gone", "invalid"]) {
-      await assert.rejects(effects.findBuild("orbital-base-hash"), { code: "image_lookup_failed" });
+      await assert.rejects(effects.findReusableBuild("orbital-base-hash"), { code: "image_lookup_failed" });
     }
     aliasStatus = 404;
-    assert.equal(await effects.findBuild("orbital-base-hash"), undefined);
+    assert.equal(await effects.findReusableBuild("orbital-base-hash"), undefined);
     for (aliasStatus of [401, 403, 429, 500]) {
-      await assert.rejects(effects.findBuild("orbital-base-hash"), { code: "image_lookup_failed" });
+      await assert.rejects(effects.findReusableBuild("orbital-base-hash"), { code: "image_lookup_failed" });
     }
     assert.ok(requests.every(request => request.startsWith("GET ")));
   } finally {

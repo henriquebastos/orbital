@@ -323,3 +323,22 @@ test("a settings read error appears in diagnostics and blocks edits", async () =
     await rm(directory, { recursive: true, force: true });
   }
 });
+
+test("an invalid value under one key does not block editing another key", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-settings-"));
+  try {
+    const filePath = join(directory, "settings.json");
+    await writeFile(filePath, JSON.stringify({ leaseWindowMs: "soon", image: "original" }));
+    const settings = createNodeSettings({ schema: orbitalSettingsSchema, directory, environment: {} });
+    const before = await settings.refresh();
+    assert.deepEqual(before.diagnostics.map(({ source }) => source), ["user"]);
+    const edited = await settings.set("image", "replacement");
+    assert.deepEqual(JSON.parse(await readFile(filePath, "utf8")), { leaseWindowMs: "soon", image: "replacement" });
+    assert.deepEqual(edited.diagnostics.map(({ source }) => source), ["user"]);
+    const repaired = await settings.set("leaseWindowMs", 90_000);
+    assert.deepEqual(repaired.diagnostics, []);
+    assert.equal(repaired.effective.leaseWindowMs, 90_000);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});

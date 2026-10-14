@@ -5,8 +5,7 @@ import { dirname, join } from "node:path";
 export interface ImageArtifact {
   reference: string;
   templateId: string;
-  /** Optional in this public type. Persisted artifact records require a nonempty build ID. */
-  buildId?: string;
+  buildId: string;
   kind: "template" | "snapshot";
   snapshotId?: string;
 }
@@ -97,19 +96,30 @@ export class ImageRecords {
     return record;
   }
 
-  async attempt(key: string): Promise<ImageAttempt | undefined> {
-    const record = await readJSON<ImageAttempt>(this.path("attempt", key));
-    if (record !== undefined && (!record || typeof record !== "object" || Array.isArray(record) ||
-      record.version !== 1 || record.key !== key || record.scope !== this.scope)) {
+  // Both attempt readers apply the same validation. Only the identity they check differs.
+  private validateAttempt(record: ImageAttempt | undefined, identity: (record: ImageAttempt) => boolean): ImageAttempt | undefined {
+    if (record === undefined) return undefined;
+    if (!record || typeof record !== "object" || Array.isArray(record) ||
+      record.version !== 1 || record.scope !== this.scope || !identity(record)) {
       throw new Error("Image attempt record has an invalid identity.");
     }
-    if (record !== undefined && (!record.attemptId || !record.stage ||
+    if (!record.attemptId || !record.stage ||
       !["active", "failed", "uncertain", "ready"].includes(record.state) ||
       record.artifact !== undefined && !validArtifact(record.artifact) ||
-      record.base !== undefined && !validArtifact(record.base))) {
+      record.base !== undefined && !validArtifact(record.base)) {
       throw new Error("Image attempt record has an invalid state.");
     }
     return record;
+  }
+
+  async attempt(key: string): Promise<ImageAttempt | undefined> {
+    return this.validateAttempt(await readJSON<ImageAttempt>(this.path("attempt", key)), (record) => record.key === key);
+  }
+
+  /** Latest saved state of one attempt by ID, not a log of its stage transitions. */
+  async attemptById(attemptId: string): Promise<ImageAttempt | undefined> {
+    return this.validateAttempt(await readJSON<ImageAttempt>(join(this.directory, this.scope, "attempts", `${attemptId}.json`)),
+      (record) => record.attemptId === attemptId);
   }
 
   async writeReady(record: ReadyImageRecord): Promise<void> {
@@ -117,20 +127,12 @@ export class ImageRecords {
     await atomicJSON(this.path("ready", record.key), record);
   }
 
+  // One attempt record is written under two indexes: attempt/<key> for the current attempt of a
+  // cache key, and attempts/<attemptId> for the latest state of that attempt. Both are overwritten.
   async writeAttempt(record: ImageAttempt): Promise<void> {
     if (record.scope !== this.scope) throw new Error("Image scope does not match the record store.");
     await atomicJSON(this.path("attempt", record.key), record);
-    await atomicJSON(join(this.directory, this.scope, "history", `${record.attemptId}.json`), record);
-  }
-
-  /** Latest saved state for one attempt, not a log of its stage transitions. */
-  async history(attemptId: string): Promise<ImageAttempt | undefined> {
-    const record = await readJSON<ImageAttempt>(join(this.directory, this.scope, "history", `${attemptId}.json`));
-    if (record !== undefined && (!record || typeof record !== "object" || Array.isArray(record) ||
-      record.version !== 1 || record.scope !== this.scope || record.attemptId !== attemptId)) {
-      throw new Error("Image attempt history has an invalid identity.");
-    }
-    return record;
+    await atomicJSON(join(this.directory, this.scope, "attempts", `${record.attemptId}.json`), record);
   }
 
   async keys(): Promise<string[]> {

@@ -13,7 +13,7 @@ export interface PrepareRequest extends ImageRequest {
 export interface PreparedImage {
   reference: string;
   baseReference: string;
-  /** Result identity. Base-only results use an artifact key, not the recipe key used by ImageRecords. */
+  /** The ImageRecords key of this result. An external image has no record, so its key is derived from the pinned build. */
   cacheKey: string;
   reused: boolean;
 }

@@ -6,8 +6,8 @@ import test from "node:test";
 
 import { Template } from "e2b";
 
-import { hashBaseRecipe, orbitalRecipe, runtimeCheckCommand } from "../../src/hangar/images/recipe.js";
-import { baseImageName } from "../../src/hangar/images/preparation.js";
+import { hashBaseRecipe, orbitalRecipe, runtimeCheckCommand } from "../../src/e2b/recipe.js";
+import { baseImageName } from "../../src/lifecycle/images/preparation.js";
 
 const root = resolve(import.meta.dirname, "../..");
 
@@ -69,19 +69,19 @@ test("resource selections change the recipe identity without changing its toolch
 test("the source hash changes with payload bytes and recipe commands", async () => {
   const directory = await mkdtemp(resolve(root, ".image-recipe-test-"));
   try {
-    for (const path of ["src/hangar/images/recipe.ts", "src/configuration/settings.ts", "guest/pod/orbital-runner.mjs", "guest/pod/renew.mjs", "guest/pod/package.json", "guest/pod/package-lock.json"]) {
+    for (const path of ["src/e2b/recipe.ts", "src/configuration/settings.ts", "guest/pod/orbital-runner.mjs", "guest/pod/renew.mjs", "guest/pod/package.json", "guest/pod/package-lock.json"]) {
       await mkdir(resolve(directory, path, ".."), { recursive: true });
       await copyFile(resolve(root, path), resolve(directory, path));
     }
-    const moduleUrl = pathToFileURL(resolve(directory, "src/hangar/images/recipe.ts")).href;
+    const moduleUrl = pathToFileURL(resolve(directory, "src/e2b/recipe.ts")).href;
     const copy = await import(moduleUrl) as { orbitalRecipe: typeof orbitalRecipe };
     const original = await copy.orbitalRecipe();
     await appendFile(resolve(directory, "guest/pod/orbital-runner.mjs"), "\n");
     const changedPayload = await copy.orbitalRecipe();
     assert.notEqual(changedPayload.sourceHash, original.sourceHash);
 
-    const source = await readFile(resolve(directory, "src/hangar/images/recipe.ts"), "utf8");
-    await writeFile(resolve(directory, "src/hangar/images/recipe.ts"), source.replace("cd /opt/orbital && npm ci --omit=dev", "cd /opt/orbital && npm ci --omit=dev --ignore-scripts"));
+    const source = await readFile(resolve(directory, "src/e2b/recipe.ts"), "utf8");
+    await writeFile(resolve(directory, "src/e2b/recipe.ts"), source.replace("cd /opt/orbital && npm ci --omit=dev", "cd /opt/orbital && npm ci --omit=dev --ignore-scripts"));
     const changedRecipe = await import(`${moduleUrl}?variant=1`) as { orbitalRecipe: typeof orbitalRecipe };
     assert.notEqual((await changedRecipe.orbitalRecipe()).sourceHash, changedPayload.sourceHash);
   } finally {

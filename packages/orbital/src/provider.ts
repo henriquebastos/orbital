@@ -12,6 +12,8 @@ export interface AllocationRequest {
 
 /** Remote effects and provider admission rules. Neither adapters nor callers retry uncertain mutations automatically. */
 export interface Provider {
+  /** Provider-specific admission for a new allocation's environment, checked before any lookup or image work. */
+  admitEnvironment?(env: Record<string, string> | undefined): void;
   resolve(orbId: string): Promise<OrbSnapshot | undefined>;
   create(request: AllocationRequest, observer?: Observer): Promise<OrbSnapshot>;
   resume(orb: OrbSnapshot): Promise<void>;

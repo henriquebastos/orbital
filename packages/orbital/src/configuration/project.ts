@@ -34,7 +34,8 @@ export async function projectPreparation(projectDirectory: string, destination =
     if (cause instanceof OrbitalError) throw cause;
     throw new OrbitalError("not_started", "configuration", "Cannot read the selected project directory.");
   }
-  // All three entries are copied and validated. Only build is invoked by the generated script.
+  // Only build is invoked by the generated script. start and resume are reserved names for a
+  // later lifecycle: they are copied and must already be executable, but nothing runs them here.
   for (const name of ["build", "start", "resume"]) {
     const entry = entries.find(item => item.path === name);
     if (entry && entry.type !== "link" && (entry.type !== "file" || !(entry.mode & 0o111))) {

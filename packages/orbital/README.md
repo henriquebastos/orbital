@@ -106,11 +106,11 @@ See [image preparation](docs/image-preparation.md) for the API and cache lifecyc
 
 | Module | Owns |
 | --- | --- |
-| `src/hangar/` | Orb creation and management, image preparation, cache identity, and local image records. |
+| `src/lifecycle/` | Orb creation and management, image preparation, cache identity, and local image records. |
 | `src/orb.ts` | Orb identity, state, creation intent, and demand decisions. |
 | `src/workspace.ts` | Commands and file operations in a selected Orb directory. |
 | `src/configuration/` | Shared settings, precedence, validation, and local settings storage. |
-| `src/e2b/` | E2B adapters for live Orbs and image operations. |
+| `src/e2b/` | E2B adapters for live Orbs, image identity, and image operations. |
 | `src/provider.ts` | The provider contract for external Orb operations. |
 | `src/operations.ts` | Progress, cancellation, and operation errors. |
 | `src/cli/image.ts` | The image preparation command. |

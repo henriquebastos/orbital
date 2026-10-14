@@ -1,6 +1,6 @@
 import { basename, dirname, join, resolve } from "node:path";
 import type { E2BProviderConfig } from "../e2b/provider.js";
-import { imageCacheDirectory } from "../hangar/images/cache-directory.js";
+import { imageCacheDirectory } from "../lifecycle/images/cache-directory.js";
 import { OrbitalError } from "../operations.js";
 import { validateEnvironment } from "../environment.js";
 import { createNodeSettings, settingsDirectory } from "./file-store.js";

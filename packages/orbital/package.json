@@ -18,7 +18,7 @@
   "files": ["dist", "guest", "docs"],
   "engines": { "node": ">=22.19.0" },
   "scripts": {
-    "build": "node scripts/bundle-pod.mjs && tsc -p tsconfig.build.json",
+    "build": "node scripts/stage-pod.mjs && tsc -p tsconfig.build.json",
     "prepack": "npm run build"
   },
   "dependencies": { "e2b": "2.51.0" }
