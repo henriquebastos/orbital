@@ -43,7 +43,7 @@ const settings = configuration.settings;
 const { effective, diagnostics } = await settings.refresh();
 if (diagnostics.length) throw new Error("Repair the reported Orbital settings.");
 await orbital.create({ orbId: "my-workspace", ...effective,
-  env: configuration.env(effective.forwardEnv) });
+  preparation: await configuration.preparation(), env: configuration.env(effective.forwardEnv) });
 ```
 
 `configuration.e2b()` returns validated provider configuration or throws before remote work.
@@ -65,6 +65,10 @@ An absolute `XDG_CONFIG_HOME` replaces `~/.config`. Each defined list fully repl
 `cwd` defaults to the process startup directory and can be supplied to `createOrbitalConfiguration()`. Its final directory name selects the private project file. No ancestor directories are searched.
 Directories with the same name share a private project directory. For a checkout named `backend`, use `~/.config/orbital/backend/settings.json`.
 The selected project directory supplies all project settings and files. Repository and private directories never merge. An empty repository settings object still selects the repository directory; invalid selected settings fail without fallback.
+`configuration.preparation()` reads every file in the selected directory and returns deterministic Bash preparation, or `undefined` when no project is selected. Pass it to `orbital.prepare()` or `orbital.create()`.
+The CLI and Pi use project preparation automatically. The directory is copied to `/opt/orbital/project`, including `settings.json`, hidden files, and ignored files. Symbolic links are preserved without following their targets.
+An executable `build` runs there through its shebang. Optional `start` and `resume` executables are copied but are not invoked yet. No `run` hook is defined.
+Every file path, content, and Unix permission mode contributes to image identity. Keep credentials outside the project directory.
 The default list is empty. Include `E2B_API_KEY` explicitly before creating an Orb.
 `settings.set(key, value)` and `settings.unset(key)` edit global saved values after refresh. They do not change project files. Unsetting does not remove project or environment overrides.
 Credentials are never included in saved settings or settings snapshots.

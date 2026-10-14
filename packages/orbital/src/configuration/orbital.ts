@@ -1,10 +1,11 @@
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { E2BProviderConfig } from "../e2b/provider.js";
 import { imageCacheDirectory } from "../hangar/images/cache-directory.js";
 import { OrbitalError } from "../operations.js";
 import { validateEnvironment } from "../environment.js";
 import { createNodeSettings, settingsDirectory } from "./file-store.js";
 import { orbitalSettingsSchema, type ImageResources } from "./settings.js";
+import { projectPreparation } from "./project.js";
 
 export function createOrbitalConfiguration(options: {
   environment?: Record<string, string | undefined>;
@@ -38,6 +39,15 @@ export function createOrbitalConfiguration(options: {
       if (!values.E2B_API_KEY?.trim()) throw new OrbitalError("not_started", "missing_renewal_key",
         "forwardEnv must include a nonempty E2B_API_KEY for Orb renewal.");
       return values;
+    },
+    async preparation(): Promise<string | undefined> {
+      const snapshot = await settings.refresh();
+      const diagnostics = snapshot.diagnostics.filter(item => item.source === "project" || item.source === "userProject");
+      if (diagnostics.length) throw new OrbitalError("not_started", "configuration",
+        diagnostics.map(item => item.message).join(" "));
+      const path = snapshot.project !== undefined ? settings.projectFilePath
+        : snapshot.userProject !== undefined ? settings.userProjectFilePath : undefined;
+      return path === undefined ? undefined : projectPreparation(dirname(path));
     },
     async resources(): Promise<ImageResources> {
       const snapshot = await settings.refresh();

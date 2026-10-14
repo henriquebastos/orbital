@@ -14,14 +14,14 @@ async function main(): Promise<void> {
     "cache-directory": { type: "string" }, help: { type: "boolean", short: "h" },
   } });
   if (values.help) {
-    process.stdout.write("Usage: orbital-image [--image REFERENCE] [--preparation FILE] [--refresh] [--cache-directory DIRECTORY]\n\nPrepare the Orbital base or cache Bash preparation. Builds run on E2B. E2B_API_KEY is required.\n");
+    process.stdout.write("Usage: orbital-image [--image REFERENCE] [--preparation FILE] [--refresh] [--cache-directory DIRECTORY]\n\nPrepare the Orbital base and selected project directory. --preparation replaces project preparation with explicit Bash source. Builds run on E2B. E2B_API_KEY is required.\n");
     return;
   }
   const configuration = createOrbitalConfiguration();
   const e2b = configuration.e2b();
   const image = await configuration.image(values.image);
   const resources = image === undefined ? await configuration.resources() : undefined;
-  const preparation = values.preparation === undefined ? undefined : await readFile(values.preparation, "utf8");
+  const preparation = values.preparation === undefined ? await configuration.preparation() : await readFile(values.preparation, "utf8");
   const cacheDirectory = values["cache-directory"] === undefined ? configuration.cacheDirectory : resolve(values["cache-directory"]);
   const orbital = createOrbital({ provider: createE2BProvider(e2b), images: createE2BImages({ ...e2b, cacheDirectory, resources }) });
   const controller = new AbortController();

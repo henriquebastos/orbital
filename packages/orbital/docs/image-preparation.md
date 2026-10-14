@@ -11,13 +11,20 @@ const configuration = createOrbitalConfiguration();
 const e2b = configuration.e2b();
 const orbital = createOrbital({
   provider: createE2BProvider(e2b),
-  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory }),
+  images: createE2BImages({ ...e2b, cacheDirectory: configuration.cacheDirectory, resources: configuration.resources }),
 });
 ```
 
 The library does not discover settings, scripts, repositories, or credentials.
 The optional Node helper supplies the default cache directory from XDG_CACHE_HOME or the home directory.
 The image adapter receives that directory explicitly.
+It also accepts `resources`: CPU count, memory in MiB, and an optional `minFreeDiskMb` target, or a function that resolves them.
+The owned recipe validates these values and includes them in its content hash before remote lookup.
+An explicit image retains its own resources. Existing Orbs are never resized.
+
+`minFreeDiskMb` requests minimum free space after the base build, not total disk capacity.
+Omitting it uses the E2B team default. Zero requests no additional growth.
+Growth is best-effort, so inspect actual free space after creation. E2B enforces account-specific resource limits.
 
 ## 1a API and sequence
 
@@ -93,6 +100,28 @@ The filename and checkout command are caller choices. Orbital does not automatic
 Use ordinary workspace commands for dependency installation, updates, and services.
 Orbital does not run readiness or resume hooks.
 
+### 1b1 Project directories
+
+The Node configuration selects `<cwd>/.orbital/settings.json` when present. Otherwise it selects `<config-directory>/<cwd-name>/settings.json`, where the configuration directory defaults to `~/.config/orbital`.
+An empty settings object still selects that directory. Invalid selected settings fail rather than falling back. Repository and private project files never merge.
+
+Both project locations use the same structure:
+
+```text
+settings.json
+build
+start
+resume
+...supporting files and directories
+```
+
+`configuration.preparation()` packages the selected directory as deterministic Bash source for the existing preparation API. No selected directory means no project preparation.
+All files are copied into `/opt/orbital/project`, including settings, hidden files, and files excluded by Git ignore rules. This replaces any previous contents at that guest path. Symbolic links are preserved without copying their targets. Special files, such as sockets and FIFOs, are rejected.
+Paths, file contents, link targets, and Unix permission modes contribute to cache identity. Modification timestamps do not. Keep credentials outside the project directory; everything copied can become part of the image.
+An optional executable `build` runs with `/opt/orbital/project` as its working directory. Its shebang selects the interpreter. A nonzero exit fails preparation. Without `build`, preparation copies files only.
+`start` and `resume` are reserved optional executables and are copied but not run. There is no automatic `run` hook. Pod lifecycle dispatch remains future work.
+The copied `settings.json` is the project source file, not a snapshot of global defaults, environment overrides, or resolved secrets.
+
 ## 1c Command
 
 Use the installed `orbital-image` executable, or run it with `npx --package @henriquebastosnet/orbital orbital-image`.
@@ -107,7 +136,8 @@ The command reads shared settings and environment overrides. `--image` overrides
 `--cache-directory` selects a different local cache. The default is `$XDG_CACHE_HOME/orbital/images` or `~/.cache/orbital/images`.
 It prints the result as JSON on stdout and progress on stderr. Ctrl-C requests cancellation.
 The source command `npm run image:build -- ...` uses this same implementation.
-Pi does not select preparation by a project file convention. To use a CLI-prepared image in Pi, select its returned reference as the image override.
+The CLI and Pi automatically use the selected project directory for new images and allocations. Project preparation applies over the resolved base, including an explicit image override. Existing orbs are not changed.
+`--preparation FILE` replaces automatic project preparation with the supplied Bash source. The lower-level library API still accepts explicit source and does not discover project files itself.
 
 ## 1d Cache and lifetime contract
 
