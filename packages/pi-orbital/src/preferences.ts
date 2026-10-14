@@ -66,16 +66,22 @@ const piPreferencesSchema: SettingsSchema<PiPreferences> = {
   },
 };
 
+// Shared settings resolve defaults, global values, one selected project, then environment overrides.
+// An empty or invalid repository marker still replaces the private project. No ancestors are searched.
+// Lists replace earlier lists. Set and unset edit global files only. Pi preferences use pi.json.
 export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
   settings = createOrbitalConfiguration().settings,
   getEnvironment = (names: readonly string[]) => createOrbitalConfiguration().env(names)) {
   const preferences = createNodeSettings({ schema: piPreferencesSchema, fileName: "pi.json" });
   const ready = Promise.all([settings.refresh(), preferences.refresh()]);
-  async function options() {
+  async function resolveAllocationOptions() {
     await ready;
     const snapshot = settings.snapshot();
+    // Shared-setting diagnostics block creation. Pi preference diagnostics remain report-only.
     const problems = snapshot.diagnostics.map(item => item.message);
     let env: Record<string, string> | undefined;
+    // The production resolver requires explicit, nonempty E2B_API_KEY forwarding for renewal.
+    // Stored forwardEnv contains names only. Resolved values belong only to allocation options.
     try { env = getEnvironment(snapshot.effective.forwardEnv); }
     catch (cause) { problems.push(cause instanceof OrbitalError ? cause.message : "Cannot resolve the instance environment."); }
     return { ...snapshot.effective, ...preferences.snapshot().effective, remoteProblem, env,
@@ -84,6 +90,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
   async function execute(action: SettingsAction) {
     await ready;
     if (action.action === "settings_refresh") {
+      // Reload snapshots, not the provider constructed at extension startup.
       await Promise.all([settings.refresh(), preferences.refresh()]);
     } else if (action.action === "settings_unset") {
       if (action.name === "autoOn" || action.name === "skillRoots") await preferences.unset(action.name);
@@ -133,7 +140,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
     if (ctx.mode === "print") process.stderr.write(`${content}\n`);
     if (ctx.hasUI) ctx.ui.notify(content, error ? "error" : "info");
   }
-  return { options, command, execute };
+  return { options: resolveAllocationOptions, command, execute };
 }
 
 export type PiSettingsControl = Pick<ReturnType<typeof createPiConfiguration>, "command" | "execute">;

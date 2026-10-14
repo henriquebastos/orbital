@@ -15,21 +15,28 @@ function unavailableProvider(message: string): Provider {
   };
 }
 
+// Composition root with three responsibilities: startup provider and image construction,
+// refreshable configuration, and Pi registration.
 export default function orbitalExtension(pi: ExtensionAPI): void {
   const orbitalConfiguration = createOrbitalConfiguration();
   let provider: Provider;
   let images: Images | undefined;
-  let problem: string | undefined;
+  let startupRemoteProblem: string | undefined;
+  // CPU, memory, and disk settings enter through image selection, not create-request fields.
+  // The image manager calls this lazily after registration, when configuration below exists.
+  const getConfiguredImageResources = () => configuration.options();
+  // Provider credentials (or unavailability) are fixed at startup, not rebuilt on settings refresh.
   try {
     const e2b = orbitalConfiguration.e2b();
     provider = createE2BProvider(e2b);
     images = createE2BImages({ ...e2b, cacheDirectory: orbitalConfiguration.cacheDirectory,
-      resources: () => configuration.options() });
+      resources: getConfiguredImageResources });
   } catch (cause) {
-    problem = cause instanceof Error ? cause.message : "Remote configuration is unavailable.";
-    provider = unavailableProvider(problem);
+    startupRemoteProblem = cause instanceof Error ? cause.message : "Remote configuration is unavailable.";
+    provider = unavailableProvider(startupRemoteProblem);
   }
-  const configuration = createPiConfiguration(pi, problem, orbitalConfiguration.settings, orbitalConfiguration.env);
+  // Refreshable settings and Pi preferences. Refresh reloads snapshots, never the provider above.
+  const configuration = createPiConfiguration(pi, startupRemoteProblem, orbitalConfiguration.settings, orbitalConfiguration.env);
   registerOrbitalPi(pi, createOrbital({ provider, images }), async () => ({
     ...await configuration.options(), preparation: orbitalConfiguration.preparation,
   }), configuration);

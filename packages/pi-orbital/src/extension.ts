@@ -96,17 +96,51 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function displaySearch(text: string, path: string, maxBytes = 50_000): string {
+// Byte clipping of search and listing display. Item limits are a separate operation applied
+// by each tool before this, and only byte clipping adds the full-output notice.
+function clipSearchDisplayBytes(text: string, path: string, maxBytes = 50_000): string {
   if (Buffer.byteLength(text) <= maxBytes) return text;
   return `${Buffer.from(text).subarray(0, maxBytes).toString("utf8")}\n[Output truncated. Full output: ${path}]`;
 }
 
-function displayBash(text: string, outputPath: string): string {
+// Format returned stdout and stderr previews, not the tail of the full output file.
+function formatReturnedBashPreviewTail(text: string, outputPath: string): string {
   const lines = text.split("\n");
   const tail = lines.slice(-2000).join("\n");
   const shown = Buffer.from(tail).subarray(-50_000).toString("utf8");
   const clipped = Buffer.byteLength(shown) < Buffer.byteLength(text) || lines.length > 2000;
   return `${clipped ? "[Output truncated]\n" : ""}${shown}\nFull output: ${outputPath}`;
+}
+
+// Select one-based lines from the whole decoded file, then cap the display at 50,000 bytes.
+function formatRemoteTextRead(text: string, requestedOffset?: number, requestedLimit?: number): string {
+  const lines = text.split("\n");
+  const offset = Math.max(1, Math.floor(requestedOffset ?? 1));
+  const limit = Math.max(1, Math.floor(requestedLimit ?? 2000));
+  let shown = lines.slice(offset - 1, offset - 1 + limit).join("\n");
+  const truncated = Buffer.byteLength(shown) > 50_000;
+  if (truncated) shown = Buffer.from(shown).subarray(0, 50_000).toString("utf8");
+  if (offset - 1 + limit < lines.length || truncated) shown += "\n[Read output truncated. Continue with offset.]";
+  return shown;
+}
+
+// Validate every edit against the original text, then apply them from the end backwards.
+function applyExactEdits(original: string, edits: readonly { oldText: string; newText: string }[]): string {
+  const changes = edits.map(edit => {
+    const index = original.indexOf(edit.oldText);
+    if (!edit.oldText || index < 0 || original.indexOf(edit.oldText, index + 1) >= 0) {
+      throw new Error("Each oldText must match exactly once in the original remote file.");
+    }
+    return { index, end: index + edit.oldText.length, newText: edit.newText };
+  }).sort((a, b) => a.index - b.index);
+  for (let i = 1; i < changes.length; i++) {
+    if (changes[i]!.index < changes[i - 1]!.end) throw new Error("Remote edits must not overlap.");
+  }
+  let revised = original;
+  for (const change of [...changes].reverse()) {
+    revised = revised.slice(0, change.index) + change.newText + revised.slice(change.end);
+  }
+  return revised;
 }
 
 function presentError(error: unknown): Error {
@@ -122,7 +156,7 @@ function presentError(error: unknown): Error {
   return new Error(`Orbital ${error.outcome} [${error.code}]: ${error.message}${details}`);
 }
 
-function registerRemoteTool<TParams extends TSchema, TDetails, TState>(
+function registerToolWithErrorPresentation<TParams extends TSchema, TDetails, TState>(
   pi: ExtensionAPI, tool: ToolDefinition<TParams, TDetails, TState>,
 ): void {
   pi.registerTool({ ...tool, async execute(...args) {
@@ -137,55 +171,64 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
 ): void {
   const getOptions = async () => typeof options === "function" ? options() : options;
   const session = createPiSession(pi, orbital, getOptions);
-  let inFlight = 0;
-  const localFactories = {
-    bash: createBashToolDefinition, read: createReadToolDefinition, write: createWriteToolDefinition,
-    edit: createEditToolDefinition, grep: createGrepToolDefinition, find: createFindToolDefinition,
-    ls: createLsToolDefinition,
-  };
-  function registerPiTool<TParams extends TSchema, TDetails, TState>(
-    api: ExtensionAPI, tool: ToolDefinition<TParams, TDetails, TState>,
+
+  // Tracking. Every registered tool, including control and status, and every user-shell command
+  // counts as tracked work from entry until return, including acquisition and failures.
+  let activeTrackedCalls = 0;
+  async function trackCall<T>(run: () => Promise<T>): Promise<T> {
+    activeTrackedCalls++;
+    try { return await run(); } finally { activeTrackedCalls--; }
+  }
+  // Control tools (orbital, orbital_skill) are tracked but never route-dispatched.
+  function registerTrackedControlTool<TParams extends TSchema, TDetails, TState>(
+    tool: ToolDefinition<TParams, TDetails, TState>,
   ): void {
-    registerRemoteTool(api, { ...tool, async execute(...args) {
-      const factory = localFactories[tool.name as keyof typeof localFactories];
-      inFlight++;
-      try {
-        if (!factory) return await tool.execute(...args);
-        const shell = args[1] as { mode?: string; timeout?: number };
-        if (tool.name === "bash" && shell.mode === "background" && shell.timeout !== undefined) {
-          throw new OrbitalError("not_started", "background_timeout", "Background launch does not accept an execution timeout.");
-        }
-        if (session.control().route === "local") {
-          if (tool.name === "bash" && (args[1] as { mode?: string }).mode === "background") {
-            throw new Error("Background Bash requires remote routing.");
-          }
-          const local = factory(args[4].cwd) as unknown as ToolDefinition<TParams, TDetails, TState>;
-          return await local.execute(...args);
-        }
-        return await tool.execute(...args);
-      } finally {
-        inFlight--;
+    registerToolWithErrorPresentation(pi, { ...tool, execute: (...args) => trackCall(() => tool.execute(...args)) });
+  }
+  // Workspace tools are tracked, then dispatched by route: the native Pi tool for ctx.cwd on local,
+  // the supplied remote implementation otherwise.
+  function registerRoutedWorkspaceTool<TParams extends TSchema, TDetails, TState>(
+    remote: ToolDefinition<TParams, TDetails, TState>, localFactory: (cwd: string) => ToolDefinition<any, any, any>,
+  ): void {
+    registerToolWithErrorPresentation(pi, { ...remote, execute: (...args) => trackCall(async () => {
+      const [, params, , , ctx] = args;
+      const shell = params as { mode?: string; timeout?: number };
+      if (remote.name === "bash" && shell.mode === "background" && shell.timeout !== undefined) {
+        throw new OrbitalError("not_started", "background_timeout", "Background launch does not accept an execution timeout.");
       }
-    } });
+      // Validate saved control before either route. Invalid state blocks local execution too.
+      if (session.control().route === "local") {
+        if (remote.name === "bash" && shell.mode === "background") {
+          throw new Error("Background Bash requires remote routing.");
+        }
+        const local = localFactory(ctx.cwd) as ToolDefinition<TParams, TDetails, TState>;
+        return local.execute(...args);
+      }
+      return remote.execute(...args);
+    }) });
   }
 
+  // Lifecycle and navigation guards.
   pi.on("session_start", (event, ctx) => session.restore(ctx, event.reason));
   pi.on("session_tree", (_event, ctx) => session.restore(ctx, "tree"));
-  pi.on("session_before_switch", () => inFlight ? { cancel: true } : undefined);
-  pi.on("session_before_fork", () => inFlight ? { cancel: true } : undefined);
-  pi.on("session_before_tree", () => inFlight ? { cancel: true } : undefined);
+  pi.on("session_before_switch", () => activeTrackedCalls ? { cancel: true } : undefined);
+  pi.on("session_before_fork", () => activeTrackedCalls ? { cancel: true } : undefined);
+  pi.on("session_before_tree", () => activeTrackedCalls ? { cancel: true } : undefined);
 
+  // Route selection and status.
   function setRoute(route: "local" | "remote", ctx: ExtensionContext, fromTool = false) {
     // The sequential control tool counts itself as one active operation.
-    if (inFlight > (fromTool ? 1 : 0) || (!fromTool && !ctx.isIdle())) {
+    if (activeTrackedCalls > (fromTool ? 1 : 0) || (!fromTool && !ctx.isIdle())) {
       throw new Error("Orbital is busy. Wait for the current work to finish.");
     }
     session.setRoute(route);
   }
-  async function status(ctx: ExtensionContext) {
+  // Report cached routing and configuration readiness. This never observes the provider;
+  // inspect performs the provider lookup, and configured resources are not an orb's actual size.
+  async function describeRoutingStatus(ctx: ExtensionContext) {
     const current = session.control();
     const settings = await getOptions();
-    const activity = inFlight || !ctx.isIdle() ? "busy" : "idle";
+    const activity = activeTrackedCalls || !ctx.isIdle() ? "busy" : "idle";
     const problems = [settings.remoteProblem, settings.creationProblem].filter(Boolean);
     const cwd = current.route === "local" ? ctx.cwd : current.orbCwd;
     const details = { ...current, orbId: ctx.sessionManager.getSessionId(), cwd, activity,
@@ -198,6 +241,7 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
     return { content, details };
   }
 
+  // Slash command and system prompt.
   pi.registerCommand("orb", {
     description: "Select local or remote routing, show status, or change Orbital settings.",
     async handler(args, ctx) {
@@ -209,7 +253,7 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         if (action === "on" || action === "off") {
           setRoute(action === "on" ? "remote" : "local", ctx);
         } else if (action !== "status") throw new Error("Use /orb on, /orb off, /orb status, or /orb settings.");
-        const result = await status(ctx);
+        const result = await describeRoutingStatus(ctx);
         message = result.content;
         details = result.details;
       } catch (error) {
@@ -232,14 +276,14 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
     event.systemPromptOptions.sections["orbital-workspace"] = `${attachment}\nThe orbital set_route tool can change the route during this turn. Its result identifies the workspace for subsequent calls.`;
   });
 
+  // User shell. The route is selected when the shell operations are requested.
   pi.on("user_bash", () => {
     let route;
     try { route = session.control().route; }
     catch (error) { throw presentError(error); }
     const local = route === "local" ? createLocalBashOperations() : undefined;
     return { operations: {
-      async exec(command, _hostCwd, options) {
-        inFlight++;
+      exec: (command, _hostCwd, options) => trackCall(async () => {
         try {
           if (local) return await local.exec(command, _hostCwd, options);
           const workspace = await session.workspace({ signal: options.signal });
@@ -264,17 +308,34 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
           }
           options.onData(Buffer.from(`\nFull output: ${result.outputPath}\n`));
           if (result.kind !== "exited") throw new Error(`Remote command ${result.kind}. Full output: ${result.outputPath}`);
+          // User-shell UI receives ordinary nonzero exits. The Bash tool raises them as errors.
           return { exitCode: result.exitCode ?? null };
         } catch (error) {
           throw presentError(error);
-        } finally {
-          inFlight--;
         }
-      },
+      }),
     } };
   });
 
-  registerPiTool(pi, {
+  // Control tools.
+  // Delete the attached orb but retain attached control, so later demand cannot silently recreate it.
+  async function deleteAttachedSessionOrb(orbId: string) {
+    session.binding();
+    await orbital.delete({ orbId });
+    return { content: [{ type: "text" as const, text: `Deleted ${orbId}` }], details: undefined };
+  }
+  // Read authorized host bytes first. The write requires an existing remote attachment regardless
+  // of route and never activates one.
+  async function copyHostSkillAssetToAttachedOrb(name: string, asset: string, destination: string,
+    roots: readonly string[] | undefined, signal: AbortSignal | undefined) {
+    const bytes = await readSkillAsset(name, asset, roots);
+    const workspace = await orbital.openWorkspace(session.binding(), { signal });
+    await workspace.writeFile(destination, bytes);
+    return { content: [{ type: "text" as const, text: `Copied ${name}/${asset} to ${destination} in the orb` }],
+      details: undefined };
+  }
+
+  registerTrackedControlTool({
     name: "orbital",
     label: "Orbital",
     description: "Select local or remote workspace routing, show status, read or edit settings, or manage the current session's orb. set_route changes subsequent workspace tools and user shell commands without creating or deleting an orb. settings_set and settings_unset edit global defaults; settings_refresh reloads files. forwardEnv contains variable names, never secret values. Resource actions create or attach an orb, select its remote directory, inspect provider state, get a port URL, or delete the orb.",
@@ -282,14 +343,16 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
     executionMode: "sequential",
     async execute(_id, params, signal, onUpdate, ctx) {
       const orbId = ctx.sessionManager.getSessionId();
+      // Routing and status actions.
       if (params.action === "set_route" || params.action === "status") {
         if (params.action === "set_route") {
           if (!params.route) throw new Error("route is required for set_route.");
           setRoute(params.route, ctx, true);
         }
-        const result = await status(ctx);
+        const result = await describeRoutingStatus(ctx);
         return { content: [{ type: "text", text: result.content }], details: result.details };
       }
+      // Settings actions.
       if (params.action === "settings_get" || params.action === "settings_set"
         || params.action === "settings_unset" || params.action === "settings_refresh") {
         if (!settingsControl) throw new Error("Orbital settings are unavailable in this extension.");
@@ -303,6 +366,7 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         } else result = await settingsControl.execute({ action: params.action });
         return { content: [{ type: "text", text: result.content }], details: result.details };
       }
+      // Resource actions.
       if (params.action === "create_and_attach") {
         const orbCwd = params.orbCwd ?? "/home/user";
         onUpdate?.({ content: [{ type: "text", text: `Creating or finding ${orbId}` }], details: undefined });
@@ -330,13 +394,12 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         const url = await orbital.url({ orbId, port: params.port! });
         return { content: [{ type: "text", text: url }], details: { url } };
       }
-      session.binding();
-      await orbital.delete({ orbId });
-      return { content: [{ type: "text", text: `Deleted ${orbId}` }], details: undefined };
+      // The validated action union leaves only delete here.
+      return deleteAttachedSessionOrb(orbId);
     },
   });
 
-  registerPiTool(pi, {
+  registerTrackedControlTool({
     name: "orbital_skill",
     label: "Orbital skill",
     description: "List allowed host skills, read one named SKILL.md, or copy one named skill asset into the attached orb. This only reads configured skill roots on the host.",
@@ -352,15 +415,12 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         return { content: [{ type: "text", text: await readSkill(params.name, roots) }], details: undefined };
       }
       if (!params.asset || !params.destination) throw new Error("Asset and destination are required.");
-      const bytes = await readSkillAsset(params.name, params.asset, roots);
-      const workspace = await orbital.openWorkspace(session.binding(), { signal });
-      await workspace.writeFile(params.destination, bytes);
-      return { content: [{ type: "text", text: `Copied ${params.name}/${params.asset} to ${params.destination} in the orb` }],
-        details: undefined };
+      return copyHostSkillAssetToAttachedOrb(params.name, params.asset, params.destination, roots, signal);
     },
   });
 
-  registerPiTool(pi, {
+  // Workspace tools: remote implementations, each paired with its native Pi factory for local routing.
+  registerRoutedWorkspaceTool({
     name: "bash",
     label: "bash",
     description: "Run a shell command in the selected local or remote workspace. Background mode requires remote routing.",
@@ -384,19 +444,21 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         },
       });
       const text = result.stdout + result.stderr;
+      // Dispatch on the returned result kind, not the requested mode. A background request
+      // returns a start receipt, or ordinary completion when the command finished early.
       if (result.kind === "background") {
         return { content: [{ type: "text", text: `Started background job ${result.jobId}. Full output: ${result.outputPath}` }],
           details: { fullOutputPath: result.outputPath } };
       }
       if (result.kind !== "exited" || result.exitCode !== 0) {
-        throw new Error(`Remote command ${result.kind} (${result.exitCode ?? "no exit code"}), job ${result.jobId}. ${displayBash(text, result.outputPath)}`);
+        throw new Error(`Remote command ${result.kind} (${result.exitCode ?? "no exit code"}), job ${result.jobId}. ${formatReturnedBashPreviewTail(text, result.outputPath)}`);
       }
-      return { content: [{ type: "text", text: displayBash(text, result.outputPath) }],
+      return { content: [{ type: "text", text: formatReturnedBashPreviewTail(text, result.outputPath) }],
         details: { fullOutputPath: result.outputPath } };
     },
-  });
+  }, createBashToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "write", label: "write", description: "Create or overwrite a file in the selected workspace.",
     promptSnippet: "Write files in the selected workspace", parameters: writeSchema,
     async execute(_id, params, signal) {
@@ -404,9 +466,9 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
       await workspace.writeFile(params.path, Buffer.from(params.content, "utf8"));
       return { content: [{ type: "text", text: `Wrote ${params.path}` }], details: undefined };
     },
-  });
+  }, createWriteToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "read", label: "read", description: "Read a text file or image in the selected workspace.",
     promptSnippet: "Read files in the selected workspace", parameters: readSchema,
     async execute(_id, params, signal) {
@@ -415,43 +477,24 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
       const mime = imageMime(bytes);
       if (mime) return { content: [{ type: "image" as const,
         data: Buffer.from(bytes).toString("base64"), mimeType: mime }], details: undefined };
-      const lines = Buffer.from(bytes).toString("utf8").split("\n");
-      const offset = Math.max(1, Math.floor(params.offset ?? 1));
-      const limit = Math.max(1, Math.floor(params.limit ?? 2000));
-      let shown = lines.slice(offset - 1, offset - 1 + limit).join("\n");
-      const truncated = Buffer.byteLength(shown) > 50_000;
-      if (truncated) shown = Buffer.from(shown).subarray(0, 50_000).toString("utf8");
-      if (offset - 1 + limit < lines.length || truncated) shown += "\n[Read output truncated. Continue with offset.]";
+      const shown = formatRemoteTextRead(Buffer.from(bytes).toString("utf8"), params.offset, params.limit);
       return { content: [{ type: "text", text: shown }], details: undefined };
     },
-  });
+  }, createReadToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "edit", label: "edit", description: "Replace exact text in one selected workspace file. Each oldText must match once in the original file, and edits must not overlap.",
     promptSnippet: "Edit files in the selected workspace", parameters: editSchema,
     async execute(_id, params, signal) {
       const workspace = await session.workspace({ signal });
       const original = Buffer.from(await workspace.readFile(params.path)).toString("utf8");
-      const changes = params.edits.map(edit => {
-        const index = original.indexOf(edit.oldText);
-        if (!edit.oldText || index < 0 || original.indexOf(edit.oldText, index + 1) >= 0) {
-          throw new Error("Each oldText must match exactly once in the original remote file.");
-        }
-        return { index, end: index + edit.oldText.length, newText: edit.newText };
-      }).sort((a, b) => a.index - b.index);
-      for (let i = 1; i < changes.length; i++) {
-        if (changes[i]!.index < changes[i - 1]!.end) throw new Error("Remote edits must not overlap.");
-      }
-      let revised = original;
-      for (const change of [...changes].reverse()) {
-        revised = revised.slice(0, change.index) + change.newText + revised.slice(change.end);
-      }
+      const revised = applyExactEdits(original, params.edits);
       await workspace.writeFile(params.path, Buffer.from(revised, "utf8"));
       return { content: [{ type: "text", text: `Edited ${params.path}` }], details: undefined };
     },
-  });
+  }, createEditToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "grep", label: "grep", description: "Search text in the selected workspace. The search respects its ignore files.",
     promptSnippet: "Search file contents in the selected workspace", parameters: grepSchema,
     async execute(_id, params, signal) {
@@ -479,11 +522,11 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
         if (matches.length >= limit) break;
       }
       const shown = matches.length ? matches.join("\n") : "No matches found";
-      return { content: [{ type: "text", text: displaySearch(shown, result.outputPath) }], details: undefined };
+      return { content: [{ type: "text", text: clipSearchDisplayBytes(shown, result.outputPath) }], details: undefined };
     },
-  });
+  }, createGrepToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "find", label: "find", description: "Find paths by glob in the selected workspace. The search respects ignore files.",
     promptSnippet: "Find files in the selected workspace", parameters: findSchema,
     async execute(_id, params, signal) {
@@ -495,12 +538,12 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
       }
       const output = Buffer.from(await workspace.readFile(result.outputPath)).toString("utf8");
       const paths = output.split("\0").filter(Boolean).slice(0, Math.max(1, Math.floor(params.limit ?? 1000)));
-      return { content: [{ type: "text", text: displaySearch(paths.join("\n") || "No files found matching pattern", result.outputPath) }],
+      return { content: [{ type: "text", text: clipSearchDisplayBytes(paths.join("\n") || "No files found matching pattern", result.outputPath) }],
         details: undefined };
     },
-  });
+  }, createFindToolDefinition);
 
-  registerPiTool(pi, {
+  registerRoutedWorkspaceTool({
     name: "ls", label: "ls", description: "List one directory in the selected workspace, including hidden entries.",
     promptSnippet: "List directories in the selected workspace", parameters: lsSchema,
     async execute(_id, params, signal) {
@@ -513,8 +556,8 @@ export function registerOrbitalPi(pi: ExtensionAPI, orbital: PiOrbitalApi,
       const output = Buffer.from(await workspace.readFile(result.outputPath)).toString("utf8");
       const entries = output.split("\0").filter(Boolean).map(item => posix.basename(item)).sort()
         .slice(0, Math.max(1, Math.floor(params.limit ?? 1000)));
-      return { content: [{ type: "text", text: displaySearch(entries.join("\n") || "Empty directory", result.outputPath) }],
+      return { content: [{ type: "text", text: clipSearchDisplayBytes(entries.join("\n") || "Empty directory", result.outputPath) }],
         details: undefined };
     },
-  });
+  }, createLsToolDefinition);
 }
