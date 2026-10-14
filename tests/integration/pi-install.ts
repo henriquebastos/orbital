@@ -99,6 +99,10 @@ try {
     orbital.path, piPackage.path], consumer);
   const installedPi = resolve(consumer, "node_modules/@henriquebastosnet/pi-orbital");
   assert.ok(existsSync(resolve(installedPi, "dist/index.js")));
+  for (const name of ["typebox", "@earendil-works/pi-coding-agent"]) {
+    assert.equal(existsSync(resolve(consumer, "node_modules", name)), false,
+      `${name} must come from the Pi host, not the extension installation`);
+  }
   verifyInstall("archive-consumer", installedPi);
   verifyInstall("workspace", resolve(root, "packages/pi-orbital"));
 } catch (cause) {
