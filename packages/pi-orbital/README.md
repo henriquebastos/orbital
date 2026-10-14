@@ -54,7 +54,7 @@ The `orbital` tool supports routing, settings, and explicit resource actions:
 | `settings_set` | `name`, `value` | Validate and save a global setting. |
 | `settings_unset` | `name` | Remove a global setting without removing project or environment overrides. |
 | `settings_refresh` | None | Reload settings from disk. |
-| `create_and_attach` | Optional `orbCwd` | Create or find this session's orb and validate its directory. The default is `/home/user`. |
+| `create_and_attach` | Optional `orbCwd` | Create or find this session's orb and validate its directory. The default is the retained remote directory on an existing orb, and `/home/user` for a new orb. |
 | `select_directory` | `orbCwd` | Validate, select, and save a remote directory. An invalid selection preserves the previous directory. |
 | `inspect` | None | Read provider state without waking the orb. |
 | `url` | `port` | Return the public native E2B URL. This does not start a listener. |
@@ -85,7 +85,7 @@ It confines host access to configured skill directories. Workspace tools do not 
 Choose host variable names with `forwardEnv` or `ORBITAL_FORWARD_ENV`. Orbital reads their values from Pi's environment at Orb creation.
 No variables are forwarded by default. Include `E2B_API_KEY` explicitly because the runner requires it for renewal.
 The host also needs that key to access E2B. Orbital never adds it to the instance automatically.
-Values belong to the instance, not the image. Orbital does not include them in settings, session bindings, or Orb metadata.
+Values belong to the instance, not the image. Orbital does not include them in settings, session control records, or Orb metadata.
 
 With `E2B_API_KEY` already exported, load a GitHub token and select both names:
 
@@ -216,7 +216,7 @@ Native E2B HTTP wake can impose a five-minute lease. HTTP connections can need r
 Background process existence does not protect HTTP work from sleep.
 
 The orb receives the shared E2B key for renewal. Its owner has passwordless sudo and can access that key.
-Commands inherit the key. Instance values are not included in Orbital metadata or session bindings.
+Commands inherit the key. Instance values are not included in Orbital metadata or session control records.
 Explicit command overrides are stored in the job request. Commands can also write inherited secrets into files or output.
 
 This version supports one orb per Pi session, branch restoration, and restart of a saved session.

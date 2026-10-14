@@ -3,23 +3,30 @@ import { homedir } from "node:os";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
+// Host skills: named access is authorization by canonical containment; discovery is a bounded
+// listing that is neither complete nor an allowlist. Configured roots add to the built-in roots.
+
 const maxSkillBytes = 100_000;
 const maxAssetBytes = 5_000_000;
+// Discovery scans this many directory levels. It is a scan limit, not an authorization limit.
+const discoveryDepth = 4;
+
+// 1. Named-access validation.
 
 function within(parent: string, child: string): boolean {
   const part = relative(parent, child);
   return part === "" || (part !== ".." && !part.startsWith(`..${sep}`) && !isAbsolute(part));
 }
 
-function safeRelative(value: string): string {
+function validateNamedSkillPath(value: string): string {
   if (!value || isAbsolute(value) || value.split(/[\\/]/).some(part => !part || part === "." || part === ".." || !/^[a-zA-Z0-9_.-]+$/.test(part))) {
     throw new Error("The skill name or asset path is not permitted.");
   }
   return value;
 }
 
-// Configured extra roots precede, rather than replace, the built-in roots. An empty
-// configuration still permits the built-in locations.
+// 2. Root resolution. Configured extra roots precede, rather than replace, the built-in roots.
+// An empty configuration still permits the built-in locations.
 async function resolveAllowedRootsWithDefaults(extraRoots: readonly string[]): Promise<string[]> {
   const defaults = [resolve(getAgentDir(), "skills"), resolve(homedir(), ".agents/skills")];
   const found = await Promise.all([...extraRoots, ...defaults].map(async path => {
@@ -29,7 +36,7 @@ async function resolveAllowedRootsWithDefaults(extraRoots: readonly string[]): P
 }
 
 async function resolveNamedSkillDirectory(name: string, extraRoots: readonly string[]): Promise<string> {
-  const safe = safeRelative(name);
+  const safe = validateNamedSkillPath(name);
   for (const root of await resolveAllowedRootsWithDefaults(extraRoots)) {
     try {
       const directory = await realpath(resolve(root, safe));
@@ -42,13 +49,13 @@ async function resolveNamedSkillDirectory(name: string, extraRoots: readonly str
   throw new Error(`Named skill ${name} was not found in an allowed skill root.`);
 }
 
-// Bounded discovery, not an authorization list. The two reaches differ both ways: named reads
+// 3. Bounded discovery, not an authorization list. The two reaches differ both ways: named reads
 // can reach deeper paths and contained symlinks that this four-level, non-symlink directory scan
 // omits, and the scan can list filesystem names that the named-access validator rejects.
 export async function listSkills(extraRoots: readonly string[] = []): Promise<string[]> {
   const names = new Set<string>();
   async function scanDiscoveryDirectories(root: string, directory: string, depth: number): Promise<void> {
-    if (depth > 4) return;
+    if (depth > discoveryDepth) return;
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const path = resolve(directory, entry.name);
@@ -66,6 +73,8 @@ export async function listSkills(extraRoots: readonly string[] = []): Promise<st
   return [...names].sort();
 }
 
+// 4. Authorized reads.
+
 export async function readSkill(name: string, extraRoots: readonly string[] = []): Promise<string> {
   const directory = await resolveNamedSkillDirectory(name, extraRoots);
   const file = await realpath(resolve(directory, "SKILL.md"));
@@ -77,7 +86,7 @@ export async function readSkill(name: string, extraRoots: readonly string[] = []
 
 export async function readSkillAsset(name: string, asset: string, extraRoots: readonly string[] = []): Promise<Uint8Array> {
   const directory = await resolveNamedSkillDirectory(name, extraRoots);
-  const file = await realpath(resolve(directory, safeRelative(asset)));
+  const file = await realpath(resolve(directory, validateNamedSkillPath(asset)));
   if (!within(directory, file) || !(await stat(file)).isFile()) {
     throw new Error("The asset is outside the named skill or is not a file.");
   }

@@ -27,7 +27,7 @@ interface Case {
 const cases: Case[] = [
   {
     name: "host_bash",
-    source: "packages/pi-orbital/src/extension.ts",
+    source: "packages/pi-orbital/src/workspace-tools.ts",
     from: 'name: "bash",\n    label: "bash",',
     to: 'name: "host_bash",\n    label: "bash",',
     test: "packages/pi-orbital/tests/real-pi.test.ts",
@@ -36,7 +36,7 @@ const cases: Case[] = [
   },
   {
     name: "pty_host_bash",
-    source: "packages/pi-orbital/src/extension.ts",
+    source: "packages/pi-orbital/src/workspace-tools.ts",
     from: 'name: "bash",\n    label: "bash",',
     to: 'name: "host_bash",\n    label: "bash",',
     test: "packages/pi-orbital/tests/pty.test.ts",
@@ -46,8 +46,8 @@ const cases: Case[] = [
   {
     name: "suppress_renewal",
     source: "packages/pod/src/orbital-runner.mjs",
-    from: 'if (request.mode === "ordinary" && !renewalInFlight && performance.now() >= nextRenewAt) {',
-    to: 'if (false && request.mode === "ordinary" && !renewalInFlight && performance.now() >= nextRenewAt) {',
+    from: 'if (request.mode === "ordinary") leaseRenewal.periodic.poll();',
+    to: 'if (false) leaseRenewal.periodic.poll();',
     test: "packages/pod/tests/runner.test.mjs",
     pattern: "silent ordinary work keeps renewing until it finishes",
     expectedFailure: /renewals during silent work/,
@@ -64,7 +64,7 @@ const cases: Case[] = [
   },
   {
     name: "ignore_malformed_latest_binding",
-    source: "packages/pi-orbital/src/binding.ts",
+    source: "packages/pi-orbital/src/control.ts",
     from: 'return { kind: "invalid", entryId: entry.id };',
     to: 'continue;',
     test: "packages/pi-orbital/tests/real-pi.test.ts",

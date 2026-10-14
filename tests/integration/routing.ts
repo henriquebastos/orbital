@@ -98,7 +98,7 @@ function bindingRecords(): Record<string, unknown>[] {
     type?: string; customType?: string; data?: Record<string, unknown>;
   });
   orbId = (entries[0] as { id: string }).id;
-  return entries.filter(entry => entry.type === "custom" && entry.customType === "orbital.binding")
+  return entries.filter(entry => entry.type === "custom" && entry.customType === "orbital.control")
     .map(entry => entry.data!);
 }
 

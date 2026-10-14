@@ -9,7 +9,7 @@ The Pi extension routes workspace tools to an Orb while reasoning and session fi
 | --- | --- |
 | [orbital](packages/orbital/README.md) | Orb and image management, workspace operations, shared settings, and the `orbital-image` command. |
 | [pod](packages/pod/README.md) | Private guest runtime. Orbital bundles its files into the image payload. |
-| [pi-orbital](packages/pi-orbital/README.md) | Pi tool routing, session binding, and Pi preferences. Depends on Orbital. |
+| [pi-orbital](packages/pi-orbital/README.md) | Pi tool routing, session control, and Pi preferences. Depends on Orbital. |
 
 The npm packages are not published yet. Install the Pi extension from a local checkout:
 

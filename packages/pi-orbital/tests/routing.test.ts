@@ -373,7 +373,7 @@ test("Pi tree navigation restores the selected branch route", async () => {
     await session.request("prompt", { message: "/orb on" });
     await session.request("bash", { command: "printf REMOTE > marker" });
     const entries = readFileSync(resolve(dir, "session.jsonl"), "utf8").trim().split("\n").map(line => JSON.parse(line));
-    const target = entries.reverse().find(entry => entry.customType === "orbital.binding" && entry.data.allocation === "attached");
+    const target = entries.reverse().find(entry => entry.customType === "orbital.control" && entry.data.allocation === "attached");
     assert.ok(target);
     await session.request("prompt", { message: "/orb off" });
     await session.request("bash", { command: "printf LOCAL > marker" });
@@ -387,7 +387,7 @@ test("Pi tree navigation restores the selected branch route", async () => {
   }
 });
 
-test("legacy bindings restore remote routing and existing unbound histories stay local", async () => {
+test("legacy cwd-only entries fail closed and existing unbound histories stay local", async () => {
   for (const legacy of [true, false]) {
     const dir = mkdtempSync(resolve(tmpdir(), "orbital-routing-"));
     let session = start(dir);
@@ -399,15 +399,23 @@ test("legacy bindings restore remote routing and existing unbound histories stay
       const file = resolve(dir, "session.jsonl");
       const entries = readFileSync(file, "utf8").trim().split("\n").map(line => JSON.parse(line));
       for (const entry of entries) {
-        if (entry.customType !== "orbital.binding") continue;
+        if (entry.customType !== "orbital.control") continue;
         if (legacy) entry.data = { orbCwd: "/home/user" };
         else entry.customType = "other-extension";
       }
       writeFileSync(file, entries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
       session = start(dir, { ORBITAL_AUTO_ON: "true" });
-      await session.request("bash", { command: "printf RESUMED >> marker" });
-      assert.equal(readFileSync(resolve(dir, legacy ? "orb/marker" : "marker"), "utf8"),
-        legacy ? "REMOTERESUMED" : "RESUMED");
+      if (legacy) {
+        // A cwd-only entry is no longer accepted control. It blocks both routes until explicit recovery.
+        const response = await session.request("bash", { command: "printf RESUMED >> marker" });
+        assert.equal(response.success, false, JSON.stringify(response));
+        assert.match(response.error ?? "", /invalid_control/);
+        assert.equal(readFileSync(resolve(dir, "orb/marker"), "utf8"), "REMOTE");
+        assert.ok(!existsSync(resolve(dir, "marker")), "the host must not run the command");
+      } else {
+        await session.request("bash", { command: "printf RESUMED >> marker" });
+        assert.equal(readFileSync(resolve(dir, "marker"), "utf8"), "RESUMED");
+      }
     } finally {
       await session.close();
       rmSync(dir, { recursive: true, force: true });

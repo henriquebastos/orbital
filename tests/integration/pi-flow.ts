@@ -118,7 +118,7 @@ try {
     assert.match(JSON.stringify(resumed[1]), /\/home\/user\/project/);
     assert.equal((await orbital.inspect({ orbId: orbId! }))?.resourceId, resourceId);
     const entries = readFileSync(session, "utf8").split("\n").filter(Boolean).map(line => JSON.parse(line));
-    const bindings = entries.filter(entry => entry.type === "custom" && entry.customType === "orbital.binding");
+    const bindings = entries.filter(entry => entry.type === "custom" && entry.customType === "orbital.control");
     assert.ok(bindings.length >= 2);
     assert.deepEqual(bindings.at(-1).data,
       { version: 1, route: "remote", allocation: "attached", orbCwd: "/home/user/project" });
@@ -136,7 +136,8 @@ try {
       { name: "find", arguments: { pattern: "*.txt", path: "." } },
       { name: "ls", arguments: { path: "." } },
       { name: "bash", arguments: { command: "cd /tmp && pwd" } },
-      { name: "bash", arguments: { command: "pwd; test -z \"${ORBITAL_SECRET_SENTINEL:-}\" && test -z \"${E2B_API_KEY:-}\"" } },
+      // Forwarded names reach commands; host values that are not forwarded do not.
+      { name: "bash", arguments: { command: "pwd; test -z \"${ORBITAL_SECRET_SENTINEL:-}\" && test -n \"${E2B_API_KEY:-}\"" } },
     ]);
     assert.ok(workspace.every(result => !result.isError), JSON.stringify(workspace));
     assert.match(JSON.stringify(workspace[1]), /Hello World!/);
@@ -233,14 +234,14 @@ try {
   if (["restore", "all"].includes(selectedCase!)) {
     const originalSession = readFileSync(session, "utf8");
     const entries = originalSession.trimEnd().split("\n").map(line => JSON.parse(line));
-    const corrupt = entries.map(entry => entry.type === "custom" && entry.customType === "orbital.binding"
+    const corrupt = entries.map(entry => entry.type === "custom" && entry.customType === "orbital.control"
       ? { ...entry, data: { orbCwd: 5 } } : entry);
     writeFileSync(session, corrupt.map(entry => JSON.stringify(entry)).join("\n") + "\n");
     const rejected = await runPi("restore-corrupt-binding", [{ name: "bash", arguments: { command: "printf CHANGED > sentinel.txt" } }]);
     assert.equal(rejected[0]!.isError, true);
-    assert.match(JSON.stringify(rejected[0]), /invalid_binding/);
+    assert.match(JSON.stringify(rejected[0]), /invalid_control/);
     writeFileSync(session, originalSession);
-    const unboundEntries = entries.filter(entry => !(entry.type === "custom" && entry.customType === "orbital.binding"));
+    const unboundEntries = entries.filter(entry => !(entry.type === "custom" && entry.customType === "orbital.control"));
     writeFileSync(session, unboundEntries.map(entry => JSON.stringify(entry)).join("\n") + "\n");
     const unbound = await runPi("restore-no-binding", [{ name: "read", arguments: { path: "sentinel.txt" } }]);
     assert.equal(unbound[0]!.isError, false);

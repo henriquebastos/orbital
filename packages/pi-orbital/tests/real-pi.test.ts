@@ -58,7 +58,7 @@ test("real Pi creates an orb, attaches, and runs a command in its workspace", ()
     assert.equal(readFileSync(hostMarker, "utf8"), "HOST_ONLY");
     assert.equal(readFileSync(resolve(dir, "orb", "marker"), "utf8"), "REMOTE_ONLY");
     const session = readFileSync(resolve(dir, "session.jsonl"), "utf8");
-    assert.match(session, /"customType":"orbital.binding"/);
+    assert.match(session, /"customType":"orbital.control"/);
     assert.match(session, /"allocation":"attached","orbCwd":"\/home\/user"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -488,7 +488,7 @@ test("Pi rejects a corrupt saved binding before any host or orb command", () => 
     assert.equal(initial.status, 0, initial.stderr);
     const lines = readFileSync(session, "utf8").trimEnd().split("\n").map(line => {
       const entry = JSON.parse(line) as { type: string; customType?: string; data?: unknown };
-      if (entry.type === "custom" && entry.customType === "orbital.binding") entry.data = { orbCwd: 5 };
+      if (entry.type === "custom" && entry.customType === "orbital.control") entry.data = { orbCwd: 5 };
       return JSON.stringify(entry);
     });
     writeFileSync(session, `${lines.join("\n")}\n`);
@@ -501,7 +501,7 @@ test("Pi rejects a corrupt saved binding before any host or orb command", () => 
       type: string; result?: { content?: { text?: string }[] }; isError?: boolean;
     }).filter(event => event.type === "tool_execution_end");
     assert.equal(results[0]?.isError, true, JSON.stringify(results));
-    assert.match(results[0]?.result?.content?.[0]?.text ?? "", /invalid_binding/);
+    assert.match(results[0]?.result?.content?.[0]?.text ?? "", /invalid_control/);
     assert.equal(readFileSync(sentinel, "utf8"), "HOST_ONLY");
   } finally {
     rmSync(dir, { recursive: true, force: true });

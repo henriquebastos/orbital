@@ -20,7 +20,7 @@ async function fixture(beforeOpen?: (observer: Observer) => Promise<void>) {
     return openWorkspace(request, observer);
   };
   const sessionManager = SessionManager.inMemory("/host", { id: "agent-original" });
-  sessionManager.appendCustomEntry("orbital.binding", {
+  sessionManager.appendCustomEntry("orbital.control", {
     version: 1, route: "remote", allocation: "attached", orbCwd: "/home/user",
   });
   const ctx = { cwd: "/host", sessionManager, isIdle: () => false } as unknown as ExtensionContext;
@@ -139,4 +139,47 @@ test("remote multi-edits reject overlapping ranges but permit adjacent ranges in
   ] });
   assert.equal(Buffer.from(f.provider.files.get(key)!).toString(), "LONGERB");
   assert.deepEqual(f.provider.effects, ["write:allocation-1:/home/user/note.txt"]);
+});
+
+test("tool status reports idle while only the status call itself is active", async () => {
+  const f = await fixture();
+  f.ctx.isIdle = () => true;
+  const result = await f.execute("orbital", { action: "status" }) as { details: { activity: string } };
+  assert.equal(result.details.activity, "idle");
+});
+
+test("explicit attachment keeps the retained remote directory when no directory is given", async () => {
+  const f = await fixture();
+  const exec = f.provider.exec.bind(f.provider);
+  f.provider.exec = async (orb, request) => {
+    const result = await exec(orb, request);
+    const entered = /^cd -- '([^']+)' && pwd -P$/.exec(request.command);
+    return entered ? { ...result, stdout: `${entered[1]}\n` } : result;
+  };
+  await f.execute("orbital", { action: "select_directory", orbCwd: "/home/user/project" });
+  const attached = await f.execute("orbital", { action: "create_and_attach" }) as { details: { orbCwd: string } };
+  assert.equal(attached.details.orbCwd, "/home/user/project");
+});
+
+test("search and listing item limits add the same truncation notice as byte clipping", async () => {
+  const f = await fixture();
+  f.provider.files.set("allocation-1:/home/user/.orbital/jobs/job-1/output", Buffer.from("/home/user/a\0/home/user/b\0/home/user/c\0"));
+  const clipped = await f.execute("ls", { limit: 2 }) as { content: { text: string }[] };
+  assert.match(clipped.content[0]!.text, /^a\nb\n\[Output truncated\. Full output: \/home\/user\/\.orbital\/jobs\/job-1\/output\]$/);
+  const complete = await f.execute("find", { pattern: "*", limit: 3 }) as { content: { text: string }[] };
+  assert.doesNotMatch(complete.content[0]!.text, /Output truncated/);
+});
+
+test("explicit attachment of a new orb starts at the default directory", async () => {
+  const f = await fixture();
+  f.provider.orbs = [];
+  const exec = f.provider.exec.bind(f.provider);
+  f.provider.exec = async (orb, request) => {
+    const result = await exec(orb, request);
+    const entered = /^cd -- '([^']+)' && pwd -P$/.exec(request.command);
+    return entered ? { ...result, stdout: `${entered[1]}\n` } : result;
+  };
+  const attached = await f.execute("orbital", { action: "create_and_attach" }) as { details: { orbCwd: string } };
+  assert.equal(attached.details.orbCwd, "/home/user");
+  assert.deepEqual(f.provider.effects.filter(effect => effect.startsWith("create")), ["create:allocation-1"]);
 });

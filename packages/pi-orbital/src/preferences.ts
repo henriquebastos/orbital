@@ -60,6 +60,7 @@ const piPreferencesSchema: SettingsSchema<PiPreferences> = {
       return value === "true";
     },
   },
+  // Extra roots only. skill-resources.ts appends the built-in roots after them.
   skillRoots: {
     environment: "ORBITAL_SKILL_ROOTS", defaultValue: [], parseSaved: skillRoots,
     parseEnvironment(value) { return skillRoots(value === "" ? [] : value.split(delimiter)); },
@@ -72,21 +73,25 @@ const piPreferencesSchema: SettingsSchema<PiPreferences> = {
 export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
   settings = createOrbitalConfiguration().settings,
   getEnvironment = (names: readonly string[]) => createOrbitalConfiguration().env(names)) {
+  // 1. Initialization: both snapshots load once; options and edits wait for that.
   const preferences = createNodeSettings({ schema: piPreferencesSchema, fileName: "pi.json" });
   const ready = Promise.all([settings.refresh(), preferences.refresh()]);
-  async function resolveAllocationOptions() {
+  // 2. Current allocation options from the current snapshots, with the creation gate.
+  async function resolveCurrentAllocationOptions() {
     await ready;
     const snapshot = settings.snapshot();
-    // Shared-setting diagnostics block creation. Pi preference diagnostics remain report-only.
-    const problems = snapshot.diagnostics.map(item => item.message);
+    // The startup remote problem and shared-setting diagnostics block creation.
+    // Pi preference diagnostics remain report-only.
+    const creationBlockers = [...(remoteProblem ? [remoteProblem] : []), ...snapshot.diagnostics.map(item => item.message)];
     let env: Record<string, string> | undefined;
     // The production resolver requires explicit, nonempty E2B_API_KEY forwarding for renewal.
     // Stored forwardEnv contains names only. Resolved values belong only to allocation options.
     try { env = getEnvironment(snapshot.effective.forwardEnv); }
-    catch (cause) { problems.push(cause instanceof OrbitalError ? cause.message : "Cannot resolve the instance environment."); }
+    catch (cause) { creationBlockers.push(cause instanceof OrbitalError ? cause.message : "Cannot resolve the instance environment."); }
     return { ...snapshot.effective, ...preferences.snapshot().effective, remoteProblem, env,
-      creationProblem: problems.length ? problems.join(" ") : undefined };
+      creationProblem: creationBlockers.length ? creationBlockers.join(" ") : undefined };
   }
+  // 3. Settings mutations, shared by the tool and the command. Edits touch global files only.
   async function execute(action: SettingsAction) {
     await ready;
     if (action.action === "settings_refresh") {
@@ -107,6 +112,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
     }
     return report();
   }
+  // 4. Reporting: saved, project, and effective values with sources and diagnostics. No secrets.
   function report(error?: string) {
     const snapshot = settings.snapshot();
     const piSnapshot = preferences.snapshot();
@@ -140,7 +146,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
     if (ctx.mode === "print") process.stderr.write(`${content}\n`);
     if (ctx.hasUI) ctx.ui.notify(content, error ? "error" : "info");
   }
-  return { options: resolveAllocationOptions, command, execute };
+  return { options: resolveCurrentAllocationOptions, command, execute };
 }
 
 export type PiSettingsControl = Pick<ReturnType<typeof createPiConfiguration>, "command" | "execute">;

@@ -68,7 +68,7 @@ test("real Pi PTY keeps a remote orb across a follow-up user turn", async () => 
       type: string; id?: string; customType?: string; data?: unknown;
       message?: { role?: string; toolName?: string; content?: { text?: string }[]; details?: { orbId?: string } };
     });
-    const binding = [...entries].reverse().find(entry => entry.customType === "orbital.binding");
+    const binding = [...entries].reverse().find(entry => entry.customType === "orbital.control");
     assert.deepEqual(binding?.data, { version: 1, route: "remote", allocation: "attached", orbCwd: "/home/user" });
     const attached = entries.find(entry => entry.message?.role === "toolResult" && entry.message.toolName === "orbital");
     const orb = JSON.parse(readFileSync(resolve(directory, "snapshot.json"), "utf8")) as { orbId: string };
