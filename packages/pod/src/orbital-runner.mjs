@@ -18,7 +18,7 @@ if (!["run", "cancel"].includes(action) || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-
 const jobDir = join(jobsDir, jobId);
 const statusPath = join(jobDir, "status.json");
 const cancelPath = join(jobDir, "cancel");
-let activePgid;
+let activeProcessGroupId;
 const pause = (ms) => new Promise((resolvePause) => setTimeout(resolvePause, ms));
 
 async function exists(path) {
@@ -31,13 +31,32 @@ async function exists(path) {
   }
 }
 
-async function status(value) {
+// Receipt publication. Rename gives atomic visibility, not fsync durability.
+async function writeStatusReceipt(value) {
   const tempPath = `${statusPath}.${randomUUID()}.tmp`;
   await writeFile(tempPath, JSON.stringify(value));
   await rename(tempPath, statusPath);
 }
 
-function renewalErrorDetails(cause) {
+// Receipt shapes, one constructor per existing branch. Each keeps its literal and spread order.
+// The shapes differ on purpose: early failures and cancellation omit process fields, and the
+// active renewal failure omits phase. These constructors perform no I/O.
+const cancelledBeforeSpawnReceipt = () => ({ state: "finished", jobId, outcome: "cancelled", scopeStopped: true });
+const preflightRenewalFailureReceipt = (renewalFailure) => ({ state: "finished", jobId, outcome: "failed", phase: "pre_execution",
+  errorCode: "renewal_failed", error: "Renewal failed.", scopeStopped: true,
+  renewal: renewalFailure ?? { category: "configuration", attempt: 0, durationMs: 0, lastSuccessAt: null } });
+const startedProcessReceipt = (mode, pid) => ({ state: "started", jobId, mode, pid, pgid: pid });
+const finishedSupervisedReceipt = (startedReceipt, outcome, scopeStopped, shellExit, failure) =>
+  ({ ...startedReceipt, state: "finished", outcome, scopeStopped, ...shellExit, ...failure });
+// The generic failure path carries error.message. It is outside the renewal privacy boundary below.
+const unhandledRunFailureReceipt = (error, scopeStopped, groupRecorded) => ({ state: "finished", jobId, outcome: "failed",
+  error: error.message, scopeStopped, ...(groupRecorded ? { phase: "execution" } : { phase: "pre_execution" }) });
+const outputWriteFailureFields = () => ({ phase: "execution", errorCode: "output_write_failed", error: "Output capture failed." });
+const activeRenewalFailureFields = (renewalFailure) => ({ errorCode: "renewal_failed", error: "Renewal failed.", renewal: renewalFailure });
+
+// Renewal-only sanitization. Only renewal evidence passes through this allowlist; generic run
+// errors and command output do not. Status resolution comes first, then ordered category selection.
+function safeRenewalErrorDetails(cause) {
   // Exception messages, stacks, headers, and arbitrary codes can contain credentials.
   const knownStatus = { AuthenticationError: 401, RateLimitError: 429,
     ServiceBusyError: 503, SandboxNotFoundError: 404 };
@@ -45,6 +64,7 @@ function renewalErrorDetails(cause) {
   const httpStatus = Number.isInteger(reportedStatus) && reportedStatus >= 100 && reportedStatus <= 599
     ? reportedStatus : Object.hasOwn(knownStatus, cause?.name) ? knownStatus[cause.name] : undefined;
   const codes = [cause?.code, cause?.cause?.code];
+
   let category = "unknown";
   if (cause?.name === "TimeoutError" || httpStatus === 408 || httpStatus === 504 ||
       codes.some(code => ["ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_HEADERS_TIMEOUT", "UND_ERR_BODY_TIMEOUT"].includes(code))) {
@@ -67,14 +87,16 @@ function writeAll(fd, chunk) {
   }
 }
 
-async function liveGroup(pgid) {
+// The managed scope is one process group. Escaped processes are outside it.
+async function hasLiveProcessGroupMembers(pgid) {
   if (await exists("/proc/self/stat")) {
     for (const entry of await readdir("/proc", { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
       try {
         const stat = await readFile(`/proc/${entry.name}/stat`, "utf8");
-        const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
-        if (Number(fields[2]) === pgid && fields[0] !== "Z") return true;
+        // Fields after the last ")" start with state, ppid, pgrp.
+        const [processState, , processGroupId] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        if (Number(processGroupId) === pgid && processState !== "Z") return true;
       } catch (error) {
         if (error.code !== "ENOENT" && error.code !== "ESRCH") throw error;
       }
@@ -83,12 +105,12 @@ async function liveGroup(pgid) {
   }
   const listing = execFileSync("ps", ["-axo", "pgid=,stat="], { encoding: "utf8" });
   return listing.split("\n").some((line) => {
-    const [group, state] = line.trim().split(/\s+/);
-    return Number(group) === pgid && state !== undefined && !state.startsWith("Z");
+    const [processGroupId, processState] = line.trim().split(/\s+/);
+    return Number(processGroupId) === pgid && processState !== undefined && !processState.startsWith("Z");
   });
 }
 
-function signalGroup(pgid, signal) {
+function signalProcessGroup(pgid, signal) {
   try {
     process.kill(-pgid, signal);
   } catch (error) {
@@ -96,21 +118,23 @@ function signalGroup(pgid, signal) {
   }
 }
 
-async function stopGroup(pgid) {
-  signalGroup(pgid, "SIGTERM");
+async function stopProcessGroup(pgid) {
+  signalProcessGroup(pgid, "SIGTERM");
   for (let attempt = 0; attempt < 20; attempt++) {
-    if (!(await liveGroup(pgid))) return true;
+    if (!(await hasLiveProcessGroupMembers(pgid))) return true;
     await pause(50);
   }
-  signalGroup(pgid, "SIGKILL");
+  signalProcessGroup(pgid, "SIGKILL");
   for (let attempt = 0; attempt < 20; attempt++) {
-    if (!(await liveGroup(pgid))) return true;
+    if (!(await hasLiveProcessGroupMembers(pgid))) return true;
     await pause(50);
   }
-  return !(await liveGroup(pgid));
+  return !(await hasLiveProcessGroupMembers(pgid));
 }
 
-async function cancel() {
+// Cancellation contract: the request file must exist, a finished status prevents marker
+// creation, and marker publication is a request, not shutdown acknowledgement. Cancel never waits.
+async function requestCancellation() {
   await access(join(jobDir, "request.json"));
   if (await exists(statusPath)) {
     const current = JSON.parse(await readFile(statusPath, "utf8"));
@@ -121,52 +145,69 @@ async function cancel() {
   });
 }
 
-async function run() {
-  const request = JSON.parse(await readFile(join(jobDir, "request.json"), "utf8"));
+// Direct runner admission. The caller validates the other request fields more strictly.
+function validateRunnerAdmission(request) {
   if (request.version !== 1 || !["ordinary", "background"].includes(request.mode)
       || typeof request.command !== "string" || typeof request.cwd !== "string"
       || !Number.isSafeInteger(request.idleTimeoutMs) || request.idleTimeoutMs < 3) {
     throw new Error("Invalid job request.");
   }
+}
 
+// Launch once per fresh job. Repeated runs can truncate output and execute again.
+// Ordinary jobs renew the lease, enforce an optional execution timeout, and clean the group on normal shell exit.
+// Background jobs do none of those. idleTimeoutMs is the lease window.
+// executionTimeoutMs separately bounds ordinary execution, regardless of command activity.
+async function runJob() {
+  // Stage 1: read and admit the request.
+  const request = JSON.parse(await readFile(join(jobDir, "request.json"), "utf8"));
+  validateRunnerAdmission(request);
+  // Both modes share the launch and output lifecycle. Only ordinary mode renews, enforces the
+  // execution timeout, and cleans descendants on normal exit. The mode checks stay inline below.
+  const leaseWindowMs = request.idleTimeoutMs;
+
+  // Stage 2: open and truncate output, then check for an early cancellation marker.
   const stdout = await open(join(jobDir, "stdout"), "w", 0o600);
   const stderr = await open(join(jobDir, "stderr"), "w", 0o600);
   const combined = await open(join(jobDir, "combined"), "w", 0o600);
   if (await exists(cancelPath)) {
-    await status({ state: "finished", jobId, outcome: "cancelled", scopeStopped: true });
+    await writeStatusReceipt(cancelledBeforeSpawnReceipt());
     await stdout.close();
     await stderr.close();
     await combined.close();
     return;
   }
-  const environment = { ...process.env, ...request.env };
+  // Command overrides do not affect renewal, which uses the runner's process.env.
+  // The child still inherits the runner's key unless the request overrides that name.
+  const commandEnvironment = { ...process.env, ...request.env };
 
+  // Renewal attempt and evidence tracking.
   let renew;
   let renewalAttempts = 0;
   let lastRenewalSuccessAt = null;
   let renewalFailure;
   async function renewLease(signal) {
-    const startedAt = performance.now();
+    const attemptStartedAt = performance.now();
     renewalAttempts++;
     try {
       await renew({ sandboxId: request.sandboxId, apiKey: process.env.E2B_API_KEY,
-        windowMs: request.idleTimeoutMs, signal });
+        windowMs: leaseWindowMs, signal });
       lastRenewalSuccessAt = new Date().toISOString();
     } catch (cause) {
-      renewalFailure = { ...renewalErrorDetails(cause), attempt: renewalAttempts,
-        durationMs: Math.round(performance.now() - startedAt), lastSuccessAt: lastRenewalSuccessAt };
+      renewalFailure = { ...safeRenewalErrorDetails(cause), attempt: renewalAttempts,
+        durationMs: Math.round(performance.now() - attemptStartedAt), lastSuccessAt: lastRenewalSuccessAt };
       throw cause;
     }
   }
+  // Stage 3: ordinary preflight renewal gate, then a second cancellation check.
+  // Preflight renewal is awaited and has no runner-side cancellation deadline.
   if (request.mode === "ordinary") {
     try {
       if (!process.env.E2B_API_KEY) throw new Error("Renewal key is missing.");
       ({ renew } = await import(process.env.ORBITAL_RENEW_MODULE ?? "./renew.mjs"));
       await renewLease();
     } catch {
-      await status({ state: "finished", jobId, outcome: "failed", phase: "pre_execution",
-        errorCode: "renewal_failed", error: "Renewal failed.", scopeStopped: true,
-        renewal: renewalFailure ?? { category: "configuration", attempt: 0, durationMs: 0, lastSuccessAt: null } });
+      await writeStatusReceipt(preflightRenewalFailureReceipt(renewalFailure));
       await stdout.close();
       await stderr.close();
       await combined.close();
@@ -174,21 +215,24 @@ async function run() {
     }
   }
   if (await exists(cancelPath)) {
-    await status({ state: "finished", jobId, outcome: "cancelled", scopeStopped: true });
+    await writeStatusReceipt(cancelledBeforeSpawnReceipt());
     await stdout.close();
     await stderr.close();
     await combined.close();
     return;
   }
+  // Stage 4: spawn the detached shell and publish the started receipt.
   const child = spawn("/bin/bash", ["-lc", request.command], {
     cwd: request.cwd,
     detached: true,
     stdio: ["ignore", "pipe", "pipe"],
-    env: environment,
+    env: commandEnvironment,
   });
   try {
     let outputError;
-    const recordOutput = (chunk, stream) => {
+    // Each chunk is fully written to its stream file, then to combined. Combined order is the
+    // callback observation order, with no causal ordering across streams.
+    const appendObservedOutputChunk = (chunk, stream) => {
       if (outputError) return;
       try {
         writeAll(stream.fd, chunk);
@@ -198,84 +242,98 @@ async function run() {
       }
     };
     child.stdout.on("data", (chunk) => {
-      recordOutput(chunk, stdout);
+      appendObservedOutputChunk(chunk, stdout);
     });
     child.stderr.on("data", (chunk) => {
-      recordOutput(chunk, stderr);
+      appendObservedOutputChunk(chunk, stderr);
     });
-    const closed = new Promise((resolveClose) => child.once("close", resolveClose));
-    let exitResult;
-    child.once("exit", (exitCode, signal) => { exitResult = { exitCode, signal }; });
+    // Shell exit ends supervision. Wait separately for stream closure before the final receipt.
+    const outputStreamsClosed = new Promise((resolveClose) => child.once("close", resolveClose));
+    let shellExit;
+    child.once("exit", (exitCode, signal) => { shellExit = { exitCode, signal }; });
     await new Promise((resolveSpawn, rejectSpawn) => {
       child.once("spawn", resolveSpawn);
       child.once("error", rejectSpawn);
     });
-    activePgid = child.pid;
-    const started = { state: "started", jobId, mode: request.mode, pid: child.pid, pgid: child.pid };
-    await status(started);
-    const startedAt = performance.now();
-    const timeoutMs = request.executionTimeoutMs;
-    const renewIntervalMs = Math.min(
-      Number(process.env.ORBITAL_RENEW_INTERVAL_MS ?? Math.floor(request.idleTimeoutMs / 3)),
-      Math.floor(request.idleTimeoutMs / 3),
+    activeProcessGroupId = child.pid;
+    const startedReceipt = startedProcessReceipt(request.mode, child.pid);
+    await writeStatusReceipt(startedReceipt);
+    // Stage 5: supervise until shell exit or a selected stop outcome.
+    // The execution clock starts after the started receipt, separate from the renewal attempt clock.
+    const executionStartedAt = performance.now();
+    const executionTimeoutMs = request.executionTimeoutMs;
+    // Periodic renewal scheduling. The override is capped by the lease window and not validated.
+    const renewalIntervalMs = Math.min(
+      Number(process.env.ORBITAL_RENEW_INTERVAL_MS ?? Math.floor(leaseWindowMs / 3)),
+      Math.floor(leaseWindowMs / 3),
     );
-    let nextRenewAt = startedAt + renewIntervalMs;
+    let nextRenewalAt = executionStartedAt + renewalIntervalMs;
+    // Completed means shell completion, not a zero exit code.
     let outcome = "completed";
+    // scopeStopped is a receipt value. Normal background completion keeps this default without
+    // checking or stopping descendants. Stop paths replace it with the observed termination result.
     let scopeStopped = true;
     let failure;
     let renewalInFlight = false;
-    let renewalError = false;
-    let renewalAbort;
-    while (!exitResult) {
+    let periodicRenewalFailureObserved = false;
+    let periodicRenewalAbortController;
+    while (!shellExit) {
       if (outputError) {
         outcome = "failed";
-        failure = { phase: "execution", errorCode: "output_write_failed", error: "Output capture failed." };
-        scopeStopped = await stopGroup(child.pid);
+        failure = outputWriteFailureFields();
+        scopeStopped = await stopProcessGroup(child.pid);
         break;
       }
       if (await exists(cancelPath)) {
         outcome = "cancelled";
-        scopeStopped = await stopGroup(child.pid);
+        scopeStopped = await stopProcessGroup(child.pid);
         break;
       }
-      if (request.mode === "ordinary" && timeoutMs !== undefined
-          && performance.now() - startedAt >= timeoutMs) {
+      if (request.mode === "ordinary" && executionTimeoutMs !== undefined
+          && performance.now() - executionStartedAt >= executionTimeoutMs) {
         outcome = "timed_out";
-        scopeStopped = await stopGroup(child.pid);
+        scopeStopped = await stopProcessGroup(child.pid);
         break;
       }
-      if (renewalError) {
+      if (periodicRenewalFailureObserved) {
         outcome = "failed";
-        failure = { errorCode: "renewal_failed", error: "Renewal failed.", renewal: renewalFailure };
-        scopeStopped = await stopGroup(child.pid);
+        failure = activeRenewalFailureFields(renewalFailure);
+        scopeStopped = await stopProcessGroup(child.pid);
         break;
       }
-      if (request.mode === "ordinary" && !renewalInFlight && performance.now() >= nextRenewAt) {
+      if (request.mode === "ordinary" && !renewalInFlight && performance.now() >= nextRenewalAt) {
         renewalInFlight = true;
-        renewalAbort = new AbortController();
-        Promise.resolve().then(() => renewLease(renewalAbort.signal))
-          .catch(() => { renewalError = true; })
+        periodicRenewalAbortController = new AbortController();
+        // Periodic renewal is nonblocking, with at most one request in flight. Rejection only sets
+        // the flag. The next eligible supervision poll selects the outcome, unless shell exit comes first.
+        Promise.resolve().then(() => renewLease(periodicRenewalAbortController.signal))
+          .catch(() => { periodicRenewalFailureObserved = true; })
           .finally(() => { renewalInFlight = false; });
-        nextRenewAt = performance.now() + renewIntervalMs;
+        nextRenewalAt = performance.now() + renewalIntervalMs;
       }
       await pause(20);
     }
-    renewalAbort?.abort();
-    if (request.mode === "ordinary" && outcome === "completed" && await liveGroup(child.pid)) {
-      scopeStopped = await stopGroup(child.pid);
+    // Stage 6: abort any in-flight renewal without joining it, then clean the group when applicable.
+    // Cancellation and timeout polling have ended with the loop.
+    periodicRenewalAbortController?.abort();
+    if (request.mode === "ordinary" && outcome === "completed" && await hasLiveProcessGroupMembers(child.pid)) {
+      scopeStopped = await stopProcessGroup(child.pid);
     }
-    await closed;
+    // Stage 7: wait for stream closure, close output, and publish completion.
+    await outputStreamsClosed;
     if (outputError && outcome === "completed") {
       outcome = "failed";
-      failure = { phase: "execution", errorCode: "output_write_failed", error: "Output capture failed." };
-      scopeStopped = await stopGroup(child.pid);
+      failure = outputWriteFailureFields();
+      scopeStopped = await stopProcessGroup(child.pid);
     }
     await stdout.close();
     await stderr.close();
     await combined.close();
-    await status({ ...started, state: "finished", outcome, scopeStopped, ...exitResult, ...failure });
-    activePgid = undefined;
+    await writeStatusReceipt(finishedSupervisedReceipt(startedReceipt, outcome, scopeStopped, shellExit, failure));
+    activeProcessGroupId = undefined;
   } finally {
+    // Receipt-existence-conditioned cleanup: a started or stale receipt suppresses this fallback.
+    // It is not an unconditional output-handle finalizer.
     if (!(await exists(statusPath))) {
       await stdout.close().catch(() => undefined);
       await stderr.close().catch(() => undefined);
@@ -284,20 +342,21 @@ async function run() {
   }
 }
 
-const operation = action === "run" ? run : cancel;
+// Receipts describe job outcomes. Runner exit status does not indicate command success.
+const operation = action === "run" ? runJob : requestCancellation;
 operation().catch(async (error) => {
   if (action !== "run") {
     console.error(error.message);
     process.exitCode = 1;
     return;
   }
-  let scopeStopped = activePgid === undefined;
-  if (activePgid !== undefined) {
-    try { scopeStopped = await stopGroup(activePgid); } catch { scopeStopped = false; }
+  let scopeStopped = activeProcessGroupId === undefined;
+  if (activeProcessGroupId !== undefined) {
+    try { scopeStopped = await stopProcessGroup(activeProcessGroupId); } catch { scopeStopped = false; }
   }
   try {
-    await status({ state: "finished", jobId, outcome: "failed", error: error.message,
-      scopeStopped, ...(activePgid === undefined ? { phase: "pre_execution" } : { phase: "execution" }) });
+    // Phase is inferred from whether the group ID was recorded, not from the started receipt.
+    await writeStatusReceipt(unhandledRunFailureReceipt(error, scopeStopped, activeProcessGroupId !== undefined));
   } catch {
     console.error("Failed to write the job receipt.");
   }
