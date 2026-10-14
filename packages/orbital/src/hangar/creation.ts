@@ -23,6 +23,7 @@ export function creationIntent(request: ImageRequest): CreationIntent {
   };
 }
 
+// Reuse compares original image and preparation intent and idle timeout, not environment or current image resources.
 export function assertCreationMatches(orb: OrbSnapshot, intent: CreationIntent, idleTimeoutMs: number): void {
   if (!orb.creationIntent && (intent.image === undefined || intent.preparationHash !== undefined)) {
     throw new OrbitalError("not_started", "legacy_creation_intent_unknown",

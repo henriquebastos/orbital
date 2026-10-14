@@ -10,11 +10,11 @@ type Entry = { path: string; mode: number } & (
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-// A deterministic Bash input lets directory preparation reuse the existing image cache and recovery path.
-export async function projectPreparation(directory: string, destination = "/opt/orbital/project"): Promise<string> {
+// Package the selected settings directory, not the checkout. Its deterministic script uses the image cache and recovery path.
+export async function projectPreparation(projectDirectory: string, destination = "/opt/orbital/project"): Promise<string> {
   const entries: Entry[] = [];
   async function visit(path: string): Promise<void> {
-    const absolute = join(directory, path);
+    const absolute = join(projectDirectory, path);
     const stat = path === "." ? await rootStat(absolute) : await lstat(absolute);
     const common = { path, mode: stat.mode & 0o777 };
     if (stat.isSymbolicLink()) {
@@ -34,6 +34,7 @@ export async function projectPreparation(directory: string, destination = "/opt/
     if (cause instanceof OrbitalError) throw cause;
     throw new OrbitalError("not_started", "configuration", "Cannot read the selected project directory.");
   }
+  // All three entries are copied and validated. Only build is invoked by the generated script.
   for (const name of ["build", "start", "resume"]) {
     const entry = entries.find(item => item.path === name);
     if (entry && entry.type !== "link" && (entry.type !== "file" || !(entry.mode & 0o111))) {

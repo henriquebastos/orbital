@@ -12,6 +12,7 @@ export interface CreateRequest extends ImageRequest {
   env?: Record<string, string>;
 }
 
+/** Coordinates Orb lifecycle and image preparation through the supplied providers. */
 export function createOrbital(configuration: { provider: Provider; images?: Images }) {
   function requireId(orbId: string) {
     if (!orbId?.trim()) throw new OrbitalError("not_started", "invalid_id", "orbId is required.");
@@ -72,6 +73,7 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
       if (!orb) throw new OrbitalError("not_started", "missing", "The orb does not exist.");
       await configuration.provider.delete(orb);
     },
+    // Resolve, wake, and bind a directory. Workspace.validateDirectory separately checks that the directory exists.
     async openWorkspace({ orbId, orbCwd }: { orbId: string; orbCwd: string }, observer: Observer = {}) {
       checkCancellation(observer);
       requireId(orbId);

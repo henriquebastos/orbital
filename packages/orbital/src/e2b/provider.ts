@@ -183,7 +183,8 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
   }
   const options = sdkOptions(config);
 
-  async function connect(orb: OrbSnapshot): Promise<Sandbox> {
+  // Connection resumes a sleeping allocation and renews its idle timeout, including for file reads.
+  async function connectAndResume(orb: OrbSnapshot): Promise<Sandbox> {
     try {
       return await Sandbox.connect(orb.resourceId, { ...options, timeoutMs: orb.idleTimeoutMs });
     } catch (cause) {
@@ -221,6 +222,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     }
   }
 
+  // This adapter is also callable directly, so it checks admission and existing intent before allocating.
   async function create(request: AllocationRequest, observer?: Observer): Promise<OrbSnapshot> {
     validateCreate(request);
     if (observer?.signal?.aborted) {
@@ -280,7 +282,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
   }
 
   async function resume(orb: OrbSnapshot): Promise<void> {
-    await connect(orb);
+    await connectAndResume(orb);
   }
 
   async function remove(orb: OrbSnapshot): Promise<void> {
@@ -302,12 +304,12 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
   }
 
   async function readFile(orb: OrbSnapshot, path: string): Promise<Uint8Array> {
-    const sandbox = await connect(orb);
+    const sandbox = await connectAndResume(orb);
     return sandbox.files.read(path, { format: "bytes" });
   }
 
   async function writeFile(orb: OrbSnapshot, path: string, content: Uint8Array): Promise<void> {
-    const sandbox = await connect(orb);
+    const sandbox = await connectAndResume(orb);
     try {
       await sandbox.files.write(path, Uint8Array.from(content).buffer);
     } catch (cause) {
@@ -317,7 +319,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
   }
 
   async function stat(orb: OrbSnapshot, path: string) {
-    const sandbox = await connect(orb);
+    const sandbox = await connectAndResume(orb);
     const info = await sandbox.files.getInfo(path);
     return { kind: info.type === FileType.DIR ? "directory" as const : "file" as const, size: info.size };
   }
@@ -327,7 +329,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     if (observer?.signal?.aborted) {
       throw error("not_started", "cancelled_before_exec", "Execution was cancelled before launch.");
     }
-    const sandbox = await connect(orb);
+    const sandbox = await connectAndResume(orb);
     const jobId = randomUUID();
     const directory = `${JOB_ROOT}/${jobId}`;
     const outputPath = `${directory}/combined`;

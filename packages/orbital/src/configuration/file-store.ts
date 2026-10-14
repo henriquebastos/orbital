@@ -24,19 +24,19 @@ export interface NodeSettings<T extends object> {
   unset(key: keyof T): Promise<SettingsSnapshot<T>>;
 }
 
-const pendingWrites = new Map<string, Promise<void>>();
+const pendingSettingsAccess = new Map<string, Promise<void>>();
 
-async function serialWrite<T>(path: string, write: () => Promise<T>): Promise<T> {
-  const previous = pendingWrites.get(path) ?? Promise.resolve();
+async function serializeSettingsAccess<T>(path: string, operation: () => Promise<T>): Promise<T> {
+  const previous = pendingSettingsAccess.get(path) ?? Promise.resolve();
   let release!: () => void;
   const current = new Promise<void>(resolve => { release = resolve; });
-  pendingWrites.set(path, current);
+  pendingSettingsAccess.set(path, current);
   await previous;
   try {
-    return await write();
+    return await operation();
   } finally {
     release();
-    if (pendingWrites.get(path) === current) pendingWrites.delete(path);
+    if (pendingSettingsAccess.get(path) === current) pendingSettingsAccess.delete(path);
   }
 }
 
@@ -73,11 +73,11 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
   }
   const filePath = join(directory, fileName);
   const { userProjectFilePath, projectFilePath } = options;
-  const projectLayers = [
+  const projectCandidates = [
     { source: "project", path: projectFilePath },
     { source: "userProject", path: userProjectFilePath },
   ] as const;
-  for (const { path } of projectLayers) {
+  for (const { path } of projectCandidates) {
     if (path !== undefined && !isAbsolute(path)) throw new Error("The project settings path must be absolute.");
   }
   const projectValues: Pick<SettingsSources, "userProject" | "project"> = {};
@@ -88,7 +88,7 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
   let current = resolveSettings(options.schema, { environment });
   let invalidUser = false;
 
-  function project(text: string | undefined, readDiagnostics: SettingsDiagnostic[] = []): SettingsSnapshot<T> {
+  function updateSnapshotFromUserText(text: string | undefined, readDiagnostics: SettingsDiagnostic[] = []): SettingsSnapshot<T> {
     const parsed = parseText(filePath, text);
     user = parsed.user;
     current = resolveSettings(options.schema, { user, ...projectValues, environment });
@@ -107,11 +107,11 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
   }
 
   async function refresh(): Promise<SettingsSnapshot<T>> {
-    return serialWrite(filePath, async () => {
+    return serializeSettingsAccess(filePath, async () => {
       projectDiagnostics = [];
       delete projectValues.project;
       delete projectValues.userProject;
-      for (const { source, path } of projectLayers) {
+      for (const { source, path } of projectCandidates) {
         if (path === undefined) continue;
         try {
           const text = await readText(path);
@@ -123,13 +123,14 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
           projectValues[source] = {};
           projectDiagnostics.push({ source, path, message: "Cannot read project settings file." });
         }
+        // A present or unreadable candidate selects the project directory. Do not merge or fall back.
         break;
       }
       try {
-        return project(await readText(filePath));
+        return updateSnapshotFromUserText(await readText(filePath));
       } catch (error) {
         const code = (error as NodeJS.ErrnoException).code;
-        return project(undefined, [{ source: "user", path: filePath, message: `Cannot read settings file (${code ?? "unknown error"})` }]);
+        return updateSnapshotFromUserText(undefined, [{ source: "user", path: filePath, message: `Cannot read settings file (${code ?? "unknown error"})` }]);
       }
     });
   }
@@ -143,7 +144,7 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
     if (!loaded) throw new Error("Refresh settings before editing.");
     if (!Object.hasOwn(options.schema, key)) throw new Error(`Unknown setting: ${String(key)}`);
     const parsedValue = remove ? undefined : options.schema[key].parseSaved(value);
-    return serialWrite(filePath, async () => {
+    return serializeSettingsAccess(filePath, async () => {
       if (invalidUser) {
         throw new Error(`Cannot edit invalid settings at ${filePath}.`);
       }
@@ -160,7 +161,7 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
       } finally {
         await rm(temporaryPath, { force: true });
       }
-      return project(text);
+      return updateSnapshotFromUserText(text);
     });
   }
 

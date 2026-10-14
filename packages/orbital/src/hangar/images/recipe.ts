@@ -24,6 +24,7 @@ async function packageRoot(): Promise<string> {
   return root;
 }
 
+/** The bundled E2B recipe. Image orchestration accepts other recipes through ImageEffects. */
 export async function orbitalRecipe(resources: Partial<ImageResources> = {}): Promise<ImageResources & {
   sourceHash: string;
   template: ReturnType<typeof Template>;

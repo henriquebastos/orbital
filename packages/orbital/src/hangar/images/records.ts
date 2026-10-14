@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 export interface ImageArtifact {
   reference: string;
   templateId: string;
+  /** Optional in this public type. Persisted artifact records require a nonempty build ID. */
   buildId?: string;
   kind: "template" | "snapshot";
   snapshotId?: string;
@@ -122,6 +123,7 @@ export class ImageRecords {
     await atomicJSON(join(this.directory, this.scope, "history", `${record.attemptId}.json`), record);
   }
 
+  /** Latest saved state for one attempt, not a log of its stage transitions. */
   async history(attemptId: string): Promise<ImageAttempt | undefined> {
     const record = await readJSON<ImageAttempt>(join(this.directory, this.scope, "history", `${attemptId}.json`));
     if (record !== undefined && (!record || typeof record !== "object" || Array.isArray(record) ||

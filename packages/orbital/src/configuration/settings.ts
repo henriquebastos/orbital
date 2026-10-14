@@ -81,6 +81,7 @@ export const orbitalSettingsSchema: SettingsSchema<OrbitalSettings> = {
   minFreeDiskMb: { ...resourceInteger("ORBITAL_MIN_FREE_DISK_MB", 0, 0), defaultValue: undefined },
   forwardEnv: {
     environment: "ORBITAL_FORWARD_ENV",
+    // Forwarding is explicit. E2B creation requires callers to select its renewal key.
     defaultValue: [],
     parseSaved: environmentNames,
     parseEnvironment(value) {
@@ -112,6 +113,7 @@ export function resolveSettings<T extends object>(schema: SettingsSchema<T>, sou
   const userProject: Partial<T> = {};
   const project: Partial<T> = {};
   const savedLayers = { user: saved, userProject, project };
+  // Select one project layer as a whole, even when its values are empty or invalid.
   const projectSource = sources.project !== undefined ? "project" : "userProject";
   const layers = (["user", projectSource] as const).map(name => {
     const input = sources[name];

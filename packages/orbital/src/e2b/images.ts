@@ -149,7 +149,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
     }
   }
 
-  async function templateArtifact(reference: string): Promise<ImageArtifact> {
+  async function resolveImageArtifact(reference: string): Promise<ImageArtifact> {
     const { name, tag } = referenceParts(reference);
     const snapshotId = `${name}:default`;
     const foundSnapshotId = await snapshotReference(snapshotId);
@@ -199,7 +199,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
     if (artifact.kind === "snapshot") {
       const snapshotId = artifact.snapshotId ?? `${referenceParts(artifact.reference).name}:default`;
       if (!await snapshotReference(snapshotId)) return false;
-      const current = await templateArtifact(artifact.reference);
+      const current = await resolveImageArtifact(artifact.reference);
       return current.kind === "snapshot" && current.buildId === artifact.buildId;
     }
     try {
@@ -221,7 +221,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
   return {
     scope,
     available,
-    external: templateArtifact,
+    external: resolveImageArtifact,
     recipe: async () => orbitalRecipe(typeof config.resources === "function" ? await config.resources() : config.resources),
     async findBuild(name): Promise<ImageBuild | undefined> {
       const alias = await apiGet(`/templates/aliases/${encodeURIComponent(name)}`);
@@ -406,7 +406,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
         async capture(name) {
           try {
             const snapshot = await Sandbox.createSnapshot(sandbox.sandboxId, { ...options, name });
-            return templateArtifact(snapshot.snapshotId);
+            return resolveImageArtifact(snapshot.snapshotId);
           } catch (cause) {
             if (rejected(cause)) throw imageError("failed", "capture_rejected", "E2B rejected the image capture.",
               { seedId: sandbox.sandboxId, name, cause: (cause as Error).name });

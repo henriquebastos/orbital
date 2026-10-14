@@ -5,6 +5,7 @@ import type { Provider } from "./provider.js";
 
 export interface ExecRequest {
   command: string;
+  /** Background waits for a start receipt or early completion. Observation ends when exec returns. */
   mode?: "ordinary" | "background";
   timeoutMs?: number;
   env?: Record<string, string>;
@@ -13,8 +14,10 @@ export interface ExecRequest {
 export interface ExecResult {
   kind: "exited" | "background" | "cancelled" | "timed_out";
   jobId: string;
+  /** E2B returns at most the first 64 KiB of each stream. */
   stdout: string;
   stderr: string;
+  /** Remote file containing the full combined output. */
   outputPath: string;
   exitCode?: number;
 }
@@ -24,6 +27,7 @@ export interface FileStat {
   size: number;
 }
 
+/** A remote working directory, not a path boundary. Tilde paths use /home/user. */
 export class Workspace {
   constructor(
     private readonly provider: Provider,
@@ -48,26 +52,26 @@ export class Workspace {
     }
   }
 
-  private path(path: string) {
+  private resolveRemotePath(path: string) {
     if (!path || path.includes("\0")) throw new OrbitalError("not_started", "invalid_path", "A remote path without null bytes is required.");
     const expanded = path === "~" ? "/home/user" : path.startsWith("~/") ? `/home/user/${path.slice(2)}` : path;
     return posix.resolve(this.orbCwd, expanded);
   }
 
-  readFile(path: string) { return this.provider.readFile(this.orb, this.path(path)); }
+  readFile(path: string) { return this.provider.readFile(this.orb, this.resolveRemotePath(path)); }
   async writeFile(path: string, content: Uint8Array) {
     checkCancellation(this.observer);
-    const resolved = this.path(path);
+    const resolved = this.resolveRemotePath(path);
     try { await this.provider.writeFile(this.orb, resolved, content); }
     catch (error) {
       if (error instanceof OrbitalError) throw error;
       throw new OrbitalError("uncertain", "transport", "The write outcome is unknown. Read the remote file before retrying.", { path: resolved });
     }
   }
-  stat(path: string) { return this.provider.stat(this.orb, this.path(path)); }
+  stat(path: string) { return this.provider.stat(this.orb, this.resolveRemotePath(path)); }
 
   async validateDirectory(path: string) {
-    const resolved = this.path(path);
+    const resolved = this.resolveRemotePath(path);
     const quoted = `'${resolved.replaceAll("'", "'\\''")}'`;
     const result = await this.exec({ command: `cd -- ${quoted} && pwd -P` });
     if (result.kind !== "exited" || result.exitCode !== 0 || !result.stdout.startsWith("/")) {

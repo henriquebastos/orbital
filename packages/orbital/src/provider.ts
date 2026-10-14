@@ -10,7 +10,7 @@ export interface AllocationRequest {
   env?: Record<string, string>;
 }
 
-/** External effects only. The application owns policy and never retries mutations. */
+/** Remote effects and provider admission rules. Neither adapters nor callers retry uncertain mutations automatically. */
 export interface Provider {
   resolve(orbId: string): Promise<OrbSnapshot | undefined>;
   create(request: AllocationRequest, observer?: Observer): Promise<OrbSnapshot>;

@@ -1,6 +1,7 @@
 export interface Observer {
   signal?: AbortSignal;
   onProgress?: (event: { phase: string; orbId?: string }) => void;
+  /** E2B execution streams a bounded output preview. Read the file at ExecResult.outputPath for the full output. */
   onOutput?: (chunk: string) => void;
 }
 
@@ -16,6 +17,7 @@ export class OrbitalError extends Error {
   }
 }
 
+// This check guards the next submission. Earlier effects, such as waking an Orb, can already have occurred.
 export function checkCancellation(observer: Observer) {
   if (observer.signal?.aborted) throw new OrbitalError("not_started", "cancelled", "The operation was cancelled before submission.");
 }

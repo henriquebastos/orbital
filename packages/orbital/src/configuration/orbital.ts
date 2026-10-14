@@ -15,6 +15,7 @@ export function createOrbitalConfiguration(options: {
   const environment = options.environment ?? process.env;
   const directory = options.directory ?? settingsDirectory(environment);
   const cwd = resolve(options.cwd ?? process.cwd());
+  // Checkouts with the same directory basename share private project settings.
   const projectName = basename(cwd);
   const userProjectFilePath = projectName ? join(directory, projectName, "settings.json") : undefined;
   const settings = createNodeSettings({ schema: orbitalSettingsSchema, environment, directory,
