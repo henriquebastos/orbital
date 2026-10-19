@@ -8,7 +8,7 @@ The Pi extension routes workspace tools to an Orb while reasoning and session fi
 | Package | Purpose |
 | --- | --- |
 | [orbital](packages/orbital/README.md) | Orb and image management, workspace operations, shared settings, and the `orbital-image` command. |
-| [pod](packages/pod/README.md) | Private guest runtime. Orbital bundles its files into the image payload. |
+| [pod](packages/pod/README.md) | Private guest runtime. The Orbital build stages its files into the image payload. |
 | [pi-orbital](packages/pi-orbital/README.md) | Pi tool routing, session control, and Pi preferences. Depends on Orbital. |
 
 The npm packages are not published yet. Install the Pi extension from a local checkout:
@@ -35,7 +35,7 @@ npm run test:local
 npm run test:install
 ```
 
-The build assembles Pod's guest payload, compiles Orbital, then compiles Pi Orbital.
+The build stages Pod's guest payload, compiles Orbital, then compiles Pi Orbital.
 The root TypeScript configuration checks package source, package tests, and shared test infrastructure.
 Each public package has a source-only build configuration.
 

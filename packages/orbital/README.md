@@ -58,13 +58,13 @@ It rejects missing variables and requires an explicitly selected, nonempty `E2B_
 Settings precedence, from lowest to highest, is:
 
 - Global: `~/.config/orbital/settings.json`.
-- One project: `<cwd>/.orbital/settings.json` when present; otherwise `~/.config/orbital/<project-directory-name>/settings.json`.
+- One project: `<cwd>/.orbital/settings.json` when present. Otherwise `~/.config/orbital/<project-directory-name>/settings.json`.
 - Environment overrides.
 
 An absolute `XDG_CONFIG_HOME` replaces `~/.config`. Each defined list fully replaces the previous list.
 `cwd` defaults to the process startup directory and can be supplied to `createOrbitalConfiguration()`. Its final directory name selects the private project file. No ancestor directories are searched.
 Directories with the same name share a private project directory. For a checkout named `backend`, use `~/.config/orbital/backend/settings.json`.
-The selected project directory supplies all project settings and files. Repository and private directories never merge. An empty repository settings object still selects the repository directory; invalid selected settings fail without fallback.
+The selected project directory supplies all project settings and files. Repository and private directories never merge. An empty repository settings object still selects the repository directory. Invalid selected settings fail without fallback.
 `configuration.preparation()` reads every file in the selected directory and returns deterministic Bash preparation, or `undefined` when no project is selected. Pass it to `orbital.prepare()` or `orbital.create()`.
 The CLI and Pi use project preparation automatically. The directory is copied to `/opt/orbital/project`, including `settings.json`, hidden files, and ignored files. Symbolic links are preserved without following their targets.
 An executable `build` runs there through its shebang. Optional `start` and `resume` executables are copied but are not invoked yet. No `run` hook is defined.
@@ -80,7 +80,7 @@ The settings adapter does not perform Orbital operations. A CLI or another agent
 Pass `env` to `orbital.create()` to set the instance environment. E2B supplies it to commands after creation and reconnect.
 The runner passes its complete environment to commands and their descendants. No variable names are reserved or filtered.
 The provider requires an explicit, nonempty `env.E2B_API_KEY` for renewal. It never copies its own API key into the instance.
-This checks presence, not validity. An invalid renewal key prevents ordinary commands from starting.
+This checks presence, not validity. An invalid renewal key prevents ordinary commands from starting. The lifecycle checks for the key before it looks up or reuses an Orb.
 
 The environment is separate from the image recipe, image cache, Orb metadata, and creation intent.
 Reusing an existing Orb keeps its original environment. A later `create()` call does not compare or replace those values.
@@ -110,12 +110,12 @@ See [image preparation](docs/image-preparation.md) for the API and cache lifecyc
 | `src/orb.ts` | Orb identity, state, creation intent, and demand decisions. |
 | `src/workspace.ts` | Commands and file operations in a selected Orb directory. |
 | `src/configuration/` | Shared settings, precedence, validation, and local settings storage. |
-| `src/e2b/` | E2B adapters for live Orbs, image identity, and image operations. |
+| `src/e2b/` | E2B adapters for live Orbs, image identity, the base recipe, and image operations. |
 | `src/provider.ts` | The provider contract for external Orb operations. |
 | `src/operations.ts` | Progress, cancellation, and operation errors. |
 | `src/cli/image.ts` | The image preparation command. |
 
-The build copies Pod source and its guest dependency lockfile into `guest/pod`.
+The build stages Pod source and its guest dependency lockfile into `guest/pod`.
 Installed Orbital archives contain those files and do not require a sibling Pod checkout.
 See [verification](https://github.com/henriquebastos/orbital/blob/main/docs/verification.md) for the shared test commands.
 

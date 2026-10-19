@@ -52,7 +52,8 @@ Creation follows this order:
 - Return the Orb. The caller can now clone repositories and install project dependencies.
 
 Preparation returns `{ reference, baseReference, cacheKey, reused }`.
-These fields help callers inspect the cache. Normal creation does not require callers to manage image references.
+`cacheKey` is the local record key of an owned result. An external image has no record, so its key is derived from the pinned build.
+Normal creation does not require callers to manage image references.
 The existing observer reports progress and preparation output.
 
 ### Composable operations
@@ -117,7 +118,7 @@ resume
 
 `configuration.preparation()` packages the selected directory as deterministic Bash source for the existing preparation API. No selected directory means no project preparation.
 All files are copied into `/opt/orbital/project`, including settings, hidden files, and files excluded by Git ignore rules. This replaces any previous contents at that guest path. Symbolic links are preserved without copying their targets. Special files, such as sockets and FIFOs, are rejected.
-Paths, file contents, link targets, and Unix permission modes contribute to cache identity. Modification timestamps do not. Keep credentials outside the project directory; everything copied can become part of the image.
+Paths, file contents, link targets, and Unix permission modes contribute to cache identity. Modification timestamps do not. Keep credentials outside the project directory. Everything copied can become part of the image.
 An optional executable `build` runs with `/opt/orbital/project` as its working directory. Its shebang selects the interpreter. A nonzero exit fails preparation. Without `build`, preparation copies files only.
 `start` and `resume` are reserved optional executables and are copied but not run. There is no automatic `run` hook. Pod lifecycle dispatch remains future work.
 The copied `settings.json` is the project source file, not a snapshot of global defaults, environment overrides, or resolved secrets.
@@ -168,7 +169,7 @@ Default-image creation and `prepare()` require the Images adapter.
 | `lifecycle/creation.ts` | Validate image inputs and compare creation intent. |
 | `lifecycle/index.ts` | Resolve existing Orbs before image work and allocate after preparation. |
 | `lifecycle/images/preparation.ts` | Order cache lookup, preparation, publication, and cleanup. |
-| `e2b/image-registry.ts` | Resolve snapshot, alias, tag, and build identity to one pinned build. |
+| `e2b/image-registry.ts` | Resolve one reference, which may name a captured snapshot, a template alias, a tag, or a build, to one pinned build. |
 | `e2b/images.ts` | Build bases, execute preparation seeds, and capture images. |
 | `lifecycle/images/records.ts` | Store attempt and ready receipts atomically. |
 | `e2b/recipe.ts` | Define the owned base from the bundled Pod files. |
@@ -184,7 +185,8 @@ Image failures report `not_started`, `failed`, or `uncertain`, with a stage and 
 A known script failure publishes no image. A failed refresh preserves the previous ready image.
 If final Orb allocation fails, the prepared image remains available.
 
-The cache keeps current records, the latest state of each attempt by ID, and script logs. Raw provider credentials are not stored in those records.
+The cache keeps ready records, the current attempt per cache key, the latest state of each attempt by ID, and script logs. Raw provider credentials are not stored in those records.
+A ready record from another preparation contract version is not reused. The preparation key covers the base build, the script, and the contract version. Resources belong to the base.
 Cache scope includes a fingerprint of the credential and the provider endpoint. Credential rotation starts a separate local cache scope.
 Remote base discovery permits reuse across installations and credentials with access to the same E2B image.
 Prepared-script images still use the local cache and are not discovered across hosts.

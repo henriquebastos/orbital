@@ -33,7 +33,7 @@ Hosted tests create E2B resources.
 | --- | --- |
 | `npm run test:preparation` | Install the packed package outside the checkout. Check automatic base creation, preparation, cache reuse, refresh, runner behavior, and cleanup on E2B. |
 | `npm run test:linux` | The command runner and Linux process behavior inside E2B. |
-| `npm run test:lifetime` | Pi exit, remote renewal, timeouts, and cancellation. |
+| `npm run test:lifetime` | Pi exit, remote renewal, execution timeouts, and cancellation. |
 | `npm run test:hosted -- --case all` | Remote files, restart, artifacts, and native HTTP while Pi is offline. |
 | `npm run test:acceptance` | The workspace regression gate, including local checks, replay, hosted checks, routing, and cleanup. |
 
