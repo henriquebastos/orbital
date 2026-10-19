@@ -100,13 +100,13 @@ A selected variable must exist in Pi's environment. Empty values are passed unch
 Missing variables prevent creation. Diagnostics show names, not values.
 The earlier `ORBITAL_ENV` JSON-map setting is no longer supported.
 
-Alternatively, save a list of names in global settings, a private project file, or `<Pi startup directory>/.orbital/settings.json`:
+Alternatively, save a list of names in global settings or in the project directory's `settings.json`:
 
 ```json
 {"forwardEnv": ["GH_TOKEN", "E2B_API_KEY"]}
 ```
 
-Precedence is global settings, then one selected project, then the environment selector. Repository settings select the project when present. Otherwise private settings do. Each defined list replaces the previous list completely.
+Precedence is global settings, then the project directory's settings, then the environment selector. Each defined list replaces the previous list completely.
 An absent setting inherits the previous list. `[]` or an empty environment selector forwards nothing, so it cannot supply the renewal key.
 There are no list-composition rules or ancestor-directory searches. Review a project's forwarding list before creating its Orb.
 
@@ -131,11 +131,12 @@ Commands can read or print every inherited variable, including `E2B_API_KEY`. Or
 
 Orbital stores shared defaults in `$XDG_CONFIG_HOME/orbital/settings.json`.
 When XDG_CONFIG_HOME is absent, it uses `~/.config/orbital/settings.json`.
-Private project settings live in `<startup-directory-name>/settings.json` below the global configuration directory. For a checkout named `backend`, use `~/.config/orbital/backend/settings.json`.
-Repository settings come from `.orbital/settings.json` in Pi's startup directory. If that file exists, the entire repository project directory wins, including when its settings object is empty. Otherwise, Pi selects the private project directory. They never merge, and an invalid selected file does not trigger fallback.
-Selected project values override global defaults. Environment overrides have the highest priority. Directories with the same name share a private project directory.
+There is one project directory. `ORBITAL_PROJECT_DIR` selects it. A relative value resolves against Pi's startup directory. Without the variable it is `.orbital` in Pi's startup directory.
+Project settings come from `settings.json` in that directory when the file exists. A missing file means no project values. A malformed file is reported and blocks creation.
+Settings precedence, from lowest to highest, is user settings, project settings, then environment overrides.
 
-For a new allocation, Pi copies all selected project files into `/opt/orbital/project` through image preparation. An executable `build` runs in that directory. Its shebang selects the interpreter. An absent `build` means copy-only preparation.
+For a new allocation, Pi copies all project directory files into `/opt/orbital/project` through image preparation. An executable `build` runs in that directory. Its shebang selects the interpreter. An absent `build` means copy-only preparation.
+A missing default `.orbital` directory means no project preparation. A missing `ORBITAL_PROJECT_DIR` directory blocks creation.
 Files named `start` and `resume` are reserved optional executables but are not invoked yet. There is no `run` hook. Hidden files and ignored files are included. Symbolic links are preserved, not followed. Every input file contributes to image identity, so keep secrets outside this directory.
 The project directory is packaged only for a new allocation. Allocation uses the refreshed project settings. Existing orbs are not updated, rebuilt, or initialized again.
 
@@ -173,7 +174,7 @@ Use Pi commands to inspect or change settings:
 /orb settings refresh
 ```
 
-The output shows global values, project values, effective values, their sources, and validation problems.
+The output shows global values, the project directory, project values, effective values, their sources, and validation problems.
 `set` and `unset` edit global settings only. Edit project settings in their file, then run `/orb settings refresh`.
 Use `unset` with any setting name to remove its global value.
 Settings changes do not switch routes or perform provider operations.

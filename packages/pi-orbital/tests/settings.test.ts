@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, delimiter, resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import test from "node:test";
 import { hostEnvironment } from "../../../tests/support/pi-environment.js";
 
@@ -140,9 +140,11 @@ test("tool settings preserve project and environment precedence", () => {
   } finally { f.close(); }
 });
 
-test("Pi reports and refreshes private project settings without allocating an orb", () => {
+test("Pi reports the one project directory and refreshes its settings without allocating an orb", () => {
   const f = fixture();
-  const path = resolve(f.config, basename(f.directory), "settings.json");
+  const projectDirectory = resolve(f.directory, "shared-project");
+  const path = resolve(projectDirectory, "settings.json");
+  mkdirSync(projectDirectory);
   try {
     const results = f.tools([
       { name: "orbital", arguments: { action: "settings_get" } },
@@ -150,18 +152,26 @@ test("Pi reports and refreshes private project settings without allocating an or
       { name: "orbital", arguments: { action: "settings_get" } },
       { name: "orbital", arguments: { action: "settings_refresh" } },
       { name: "orbital", arguments: { action: "status" } },
-    ]);
+    ], { ORBITAL_PROJECT_DIR: projectDirectory });
     for (const result of results) assert.equal(result.isError, false, JSON.stringify(result));
     assert.equal(results[2].result.details.settings.source.memoryMB, "default");
-    assert.equal(results[3].result.details.settings.source.memoryMB, "userProject");
-    assert.deepEqual(results[3].result.details.settings.userProject, { memoryMB: 8192 });
+    assert.equal(results[3].result.details.settings.source.memoryMB, "project");
+    assert.deepEqual(results[3].result.details.settings.project, { memoryMB: 8192 });
+    assert.equal("userProject" in results[3].result.details.settings, false);
     assert.equal(results[4].result.details.configuredResources.memoryMB, 8192);
     assert.equal(results[4].result.details.allocation, "neverRequested");
-    const message = f.command("/orb settings set memoryMB 4096");
+    const message = f.command("/orb settings set memoryMB 4096", { ORBITAL_PROJECT_DIR: projectDirectory });
     assert.equal(message.details.settings.saved.memoryMB, 4096);
     assert.equal(message.details.settings.effective.memoryMB, 8192);
-    assert.ok(JSON.stringify(message.content).includes(path));
+    assert.match(message.content, new RegExp(`^Project directory: ${projectDirectory.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+    assert.match(message.content, /^Project: \{"memoryMB":8192\}$/m);
+    assert.doesNotMatch(message.content, /User project|Selected project/);
     assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), { memoryMB: 8192 });
+    const defaultReport = f.command("/orb settings");
+    // Pi starts in the realpath of the fixture directory, so the default is <realpath cwd>/.orbital.
+    assert.match(defaultReport.content, new RegExp(`^Project directory: ${resolve(realpathSync(f.directory), ".orbital").replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "m"));
+    assert.match(defaultReport.content, /^Project: /m);
+    assert.doesNotMatch(defaultReport.content, /User project|Selected project/);
   } finally { f.close(); }
 });
 

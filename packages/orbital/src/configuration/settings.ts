@@ -10,7 +10,7 @@ export type SettingsSchema<T extends object> = {
 };
 
 export interface SettingsDiagnostic {
-  source: "user" | "userProject" | "project" | "environment";
+  source: "user" | "project" | "environment";
   key?: string;
   message: string;
   path?: string;
@@ -18,16 +18,14 @@ export interface SettingsDiagnostic {
 
 export interface SettingsSnapshot<T extends object> {
   saved: Partial<T>;
-  userProject?: Partial<T>;
   project?: Partial<T>;
   effective: T;
-  source: { [K in keyof T]-?: "default" | "user" | "userProject" | "project" | "environment" };
+  source: { [K in keyof T]-?: "default" | "user" | "project" | "environment" };
   diagnostics: SettingsDiagnostic[];
 }
 
 export interface SettingsSources {
   user?: unknown;
-  userProject?: unknown;
   project?: unknown;
   environment?: Record<string, string | undefined>;
 }
@@ -110,12 +108,9 @@ export function resolveSettings<T extends object>(schema: SettingsSchema<T>, sou
   const effective = {} as T;
   const source = {} as SettingsSnapshot<T>["source"];
   const diagnostics: SettingsDiagnostic[] = [];
-  const userProject: Partial<T> = {};
   const project: Partial<T> = {};
-  const savedLayers = { user: saved, userProject, project };
-  // Select one project layer as a whole, even when its values are empty or invalid.
-  const projectSource = sources.project !== undefined ? "project" : "userProject";
-  const layers = (["user", projectSource] as const).map(name => {
+  const savedLayers = { user: saved, project };
+  const layers = (["user", "project"] as const).map(name => {
     const input = sources[name];
     const valid = input === undefined || (input !== null && typeof input === "object" && !Array.isArray(input));
     if (!valid) diagnostics.push({ source: name, message: "must be a JSON object" });
@@ -155,6 +150,5 @@ export function resolveSettings<T extends object>(schema: SettingsSchema<T>, sou
     }
   }
 
-  return { saved, ...(projectSource !== "userProject" || sources.userProject === undefined ? {} : { userProject }),
-    ...(sources.project === undefined ? {} : { project }), effective, source, diagnostics };
+  return { saved, ...(sources.project === undefined ? {} : { project }), effective, source, diagnostics };
 }

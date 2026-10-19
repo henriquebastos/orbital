@@ -104,77 +104,91 @@ test("project settings replace global forwarding and refresh detects project edi
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("private project files resolve by directory name without changing global write targets", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "orbital-private-project-"));
+test("the project directory is the option, then ORBITAL_PROJECT_DIR, then <cwd>/.orbital", () => {
+  const cwd = "/checkouts/backend";
+  const cases: [{ projectDirectory?: string; environment: Record<string, string | undefined> }, string][] = [
+    [{ environment: {} }, "/checkouts/backend/.orbital"],
+    [{ environment: { ORBITAL_PROJECT_DIR: "" } }, "/checkouts/backend/.orbital"],
+    [{ environment: { ORBITAL_PROJECT_DIR: "rel" } }, "/checkouts/backend/rel"],
+    [{ environment: { ORBITAL_PROJECT_DIR: "/shared/project" } }, "/shared/project"],
+    [{ projectDirectory: "/explicit/project", environment: { ORBITAL_PROJECT_DIR: "/shared/project" } }, "/explicit/project"],
+    [{ projectDirectory: "explicit", environment: {} }, "/checkouts/backend/explicit"],
+  ];
+  for (const [options, expected] of cases) {
+    const configuration = createOrbitalConfiguration({ directory: "/config/orbital", cwd, ...options });
+    assert.equal(configuration.projectDirectory, expected);
+    assert.equal(configuration.settings.projectFilePath, join(expected, "settings.json"));
+  }
+  // The variable is read from the injected environment, never from process.env.
+  process.env.ORBITAL_PROJECT_DIR = "/leaked/project";
+  try {
+    assert.equal(createOrbitalConfiguration({ directory: "/config/orbital", cwd, environment: {} }).projectDirectory, "/checkouts/backend/.orbital");
+  } finally { delete process.env.ORBITAL_PROJECT_DIR; }
+  assert.equal("userProjectFilePath" in createOrbitalConfiguration({ directory: "/config/orbital", cwd, environment: {} }).settings, false);
+  assert.throws(() => createNodeSettings({ schema: orbitalSettingsSchema, projectFilePath: "relative.json" }), /must be absolute/);
+});
+
+test("a project directory selected by ORBITAL_PROJECT_DIR supplies the project layer without changing global write targets", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-project-dir-"));
   const cwd = join(directory, "checkout", "backend");
-  const configDirectory = join(directory, "config", "orbital");
-  const privatePath = join(configDirectory, "backend", "settings.json");
-  const repositoryPath = join(cwd, ".orbital", "settings.json");
-  await mkdir(join(cwd, ".orbital"), { recursive: true });
-  await mkdir(join(configDirectory, "backend"), { recursive: true });
-  const environment: Record<string, string | undefined> = { XDG_CONFIG_HOME: join(directory, "config") };
+  const projectDirectory = join(directory, "shared-project");
+  const projectPath = join(projectDirectory, "settings.json");
+  await mkdir(cwd, { recursive: true });
+  await mkdir(projectDirectory);
+  const environment: Record<string, string | undefined> = { XDG_CONFIG_HOME: join(directory, "config"), ORBITAL_PROJECT_DIR: projectDirectory };
   try {
     const configuration = createOrbitalConfiguration({ cwd, environment });
     const settings = configuration.settings;
-    assert.equal(settings.userProjectFilePath, privatePath);
+    assert.equal(settings.projectFilePath, projectPath);
     await settings.refresh();
     await settings.set("memoryMB", 2048);
-    const privateText = '{"cpuCount":2,"memoryMB":8192,"minFreeDiskMb":8192}\n';
-    await writeFile(privatePath, privateText);
+    const projectText = '{"cpuCount":2,"memoryMB":8192,"minFreeDiskMb":8192}\n';
+    await writeFile(projectPath, projectText);
     assert.deepEqual(await configuration.resources(), { cpuCount: 2, memoryMB: 8192, minFreeDiskMb: 8192 });
-    assert.equal(settings.snapshot().source.memoryMB, "userProject");
-    assert.deepEqual(settings.snapshot().userProject, { cpuCount: 2, memoryMB: 8192, minFreeDiskMb: 8192 });
+    assert.equal(settings.snapshot().source.memoryMB, "project");
+    assert.deepEqual(settings.snapshot().project, { cpuCount: 2, memoryMB: 8192, minFreeDiskMb: 8192 });
     await settings.set("memoryMB", 4096);
     assert.equal(settings.snapshot().effective.memoryMB, 8192);
-    assert.equal(await readFile(privatePath, "utf8"), privateText);
+    assert.equal(await readFile(projectPath, "utf8"), projectText);
     assert.deepEqual(JSON.parse(await readFile(settings.filePath, "utf8")), { memoryMB: 4096 });
-    await writeFile(repositoryPath, '{"cpuCount":4}');
-    assert.deepEqual(await configuration.resources(), { cpuCount: 4, memoryMB: 4096, minFreeDiskMb: undefined });
-    assert.equal(settings.selectedProjectFilePath, repositoryPath);
-    assert.equal(settings.snapshot().userProject, undefined);
     environment.ORBITAL_CPU_COUNT = "8";
     assert.equal((await configuration.resources()).cpuCount, 8);
     delete environment.ORBITAL_CPU_COUNT;
-    const other = createOrbitalConfiguration({ cwd: join(directory, "other"), environment });
+    // A checkout-local .orbital directory is ignored while the variable selects another directory.
+    await mkdir(join(cwd, ".orbital"));
+    await writeFile(join(cwd, ".orbital", "settings.json"), '{"cpuCount":4}');
+    assert.deepEqual(await configuration.resources(), { cpuCount: 2, memoryMB: 8192, minFreeDiskMb: 8192 });
+    const other = createOrbitalConfiguration({ cwd: join(directory, "other"), environment: { XDG_CONFIG_HOME: join(directory, "config") } });
     assert.equal((await other.resources()).memoryMB, 4096);
     assert.equal(other.settings.snapshot().source.memoryMB, "user");
-    const sameName = createOrbitalConfiguration({ cwd: join(directory, "another", "backend"), environment });
-    assert.equal((await sameName.resources()).memoryMB, 8192);
-    await rm(privatePath);
-    assert.deepEqual(await configuration.resources(), { cpuCount: 4, memoryMB: 4096, minFreeDiskMb: undefined });
+    await rm(projectPath);
+    assert.deepEqual(await configuration.resources(), { cpuCount: 2, memoryMB: 4096, minFreeDiskMb: undefined });
+    assert.equal(settings.snapshot().project, undefined);
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("private project diagnostics include the path and refresh clears read and parse errors", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "orbital-private-errors-"));
-  const privatePath = join(directory, "backend", "settings.json");
-  await mkdir(join(directory, "backend"));
+test("project diagnostics include the path and refresh clears read and parse errors", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-project-errors-"));
+  const cwd = join(directory, "backend");
+  const projectPath = join(cwd, ".orbital", "settings.json");
+  await mkdir(join(cwd, ".orbital"), { recursive: true });
   try {
-    const configuration = createOrbitalConfiguration({ directory, cwd: join(directory, "backend"), environment: {} });
+    const configuration = createOrbitalConfiguration({ directory, cwd, environment: {} });
     for (const text of ['{"memoryMB":"PRIVATE_VALUE",', '{"memoryMB":"PRIVATE_VALUE"}', '[]']) {
-      await writeFile(privatePath, text);
+      await writeFile(projectPath, text);
       await assert.rejects(configuration.resources(), { code: "configuration" });
       const snapshot = configuration.settings.snapshot();
-      assert.deepEqual(snapshot.diagnostics.map(item => [item.source, item.path]), [["userProject", privatePath]]);
+      assert.deepEqual(snapshot.diagnostics.map(item => [item.source, item.path]), [["project", projectPath]]);
       assert.doesNotMatch(JSON.stringify(snapshot), /PRIVATE_VALUE/);
     }
-    await rm(privatePath);
-    await mkdir(privatePath);
+    await rm(projectPath);
+    await mkdir(projectPath);
     await assert.rejects(configuration.resources(), { code: "configuration" });
-    assert.equal(configuration.settings.snapshot().diagnostics[0]?.path, privatePath);
-    await rm(privatePath, { recursive: true });
+    assert.equal(configuration.settings.snapshot().diagnostics[0]?.path, projectPath);
+    await rm(projectPath, { recursive: true });
     assert.deepEqual(await configuration.resources(), resources);
     assert.deepEqual(configuration.settings.snapshot().diagnostics, []);
   } finally { await rm(directory, { recursive: true, force: true }); }
-});
-
-test("project directories do not collide with global settings and Pi preferences", () => {
-  for (const name of ["settings", "pi"]) {
-    const configuration = createOrbitalConfiguration({ directory: "/config/orbital", cwd: `/projects/${name}`, environment: {} });
-    assert.equal(configuration.settings.userProjectFilePath, `/config/orbital/${name}/settings.json`);
-    assert.equal(configuration.settings.projectFilePath, `/projects/${name}/.orbital/settings.json`);
-  }
-  assert.throws(() => createNodeSettings({ schema: orbitalSettingsSchema, userProjectFilePath: "relative.json" }), /must be absolute/);
 });
 
 test("the Node adapter uses the XDG fallback for empty or relative config paths", () => {

@@ -104,10 +104,11 @@ Orbital does not run readiness or resume hooks.
 
 ### 1b1 Project directories
 
-The Node configuration selects `<cwd>/.orbital/settings.json` when present. Otherwise it selects `<config-directory>/<cwd-name>/settings.json`, where the configuration directory defaults to `~/.config/orbital`.
-An empty settings object still selects that directory. Invalid selected settings fail rather than falling back. Repository and private project files never merge.
+There is one project directory. The Node configuration uses the `projectDirectory` option, else `ORBITAL_PROJECT_DIR`, else `<cwd>/.orbital`. A relative value resolves against `cwd`.
+`settings.json` is optional. A missing file is an empty project layer. An invalid file fails rather than falling back.
+A directory that holds only an executable `build` is packaged.
 
-Both project locations use the same structure:
+The project directory uses this structure:
 
 ```text
 settings.json
@@ -117,7 +118,7 @@ resume
 ...supporting files and directories
 ```
 
-`configuration.preparation()` packages the selected directory as deterministic Bash source for the existing preparation API. No selected directory means no project preparation.
+`configuration.preparation()` packages the project directory as deterministic Bash source for the existing preparation API. An absent default `<cwd>/.orbital` means no project preparation. An absent explicit directory is a `configuration` error.
 All files are copied into `/opt/orbital/project`, including settings, hidden files, and files excluded by Git ignore rules. This replaces any previous contents at that guest path. Symbolic links are preserved without copying their targets. Special files, such as sockets and FIFOs, are rejected.
 Paths, file contents, link targets, and Unix permission modes contribute to cache identity. Modification timestamps do not. Keep credentials outside the project directory. Everything copied can become part of the image.
 An optional executable `build` runs with `/opt/orbital/project` as its working directory. Its shebang selects the interpreter. A nonzero exit fails preparation. Without `build`, preparation copies files only.

@@ -1,4 +1,5 @@
-import { basename, dirname, join, resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { E2BProviderConfig } from "../e2b/provider.js";
 import { imageCacheDirectory } from "../lifecycle/images/cache-directory.js";
 import { OrbitalError } from "../operations.js";
@@ -11,17 +12,20 @@ export function createOrbitalConfiguration(options: {
   environment?: Record<string, string | undefined>;
   directory?: string;
   cwd?: string;
+  projectDirectory?: string;
 } = {}) {
   const environment = options.environment ?? process.env;
   const directory = options.directory ?? settingsDirectory(environment);
   const cwd = resolve(options.cwd ?? process.cwd());
-  // Checkouts with the same directory basename share private project settings.
-  const projectName = basename(cwd);
-  const userProjectFilePath = projectName ? join(directory, projectName, "settings.json") : undefined;
+  // One project directory: the option, then ORBITAL_PROJECT_DIR, then <cwd>/.orbital. Only the default may be absent.
+  // A blank variable is unset, like XDG_CONFIG_HOME, so an empty value never packages the whole checkout.
+  const selectedProjectDirectory = options.projectDirectory ?? (environment.ORBITAL_PROJECT_DIR?.trim() ? environment.ORBITAL_PROJECT_DIR : undefined);
+  const projectDirectory = resolve(cwd, selectedProjectDirectory ?? ".orbital");
   const settings = createNodeSettings({ schema: orbitalSettingsSchema, environment, directory,
-    userProjectFilePath, projectFilePath: join(cwd, ".orbital/settings.json") });
+    projectFilePath: join(projectDirectory, "settings.json") });
   return {
     settings,
+    projectDirectory,
     cacheDirectory: imageCacheDirectory(environment),
     e2b(): E2BProviderConfig {
       const apiKey = environment.E2B_API_KEY;
@@ -43,12 +47,18 @@ export function createOrbitalConfiguration(options: {
     },
     async preparation(): Promise<string | undefined> {
       const snapshot = await settings.refresh();
-      const diagnostics = snapshot.diagnostics.filter(item => item.source === "project" || item.source === "userProject");
+      const diagnostics = snapshot.diagnostics.filter(item => item.source === "project");
       if (diagnostics.length) throw new OrbitalError("not_started", "configuration",
         diagnostics.map(item => item.message).join(" "));
-      const path = snapshot.project !== undefined ? settings.projectFilePath
-        : snapshot.userProject !== undefined ? settings.userProjectFilePath : undefined;
-      return path === undefined ? undefined : projectPreparation(dirname(path));
+      try {
+        await stat(projectDirectory);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          if (selectedProjectDirectory === undefined) return undefined;
+          throw new OrbitalError("not_started", "configuration", `The project directory does not exist: ${projectDirectory}.`);
+        }
+      }
+      return projectPreparation(projectDirectory);
     },
     async resources(): Promise<ImageResources> {
       const snapshot = await settings.refresh();

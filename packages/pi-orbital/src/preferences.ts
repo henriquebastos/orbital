@@ -1,5 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { delimiter, isAbsolute } from "node:path";
+import { delimiter, dirname, isAbsolute } from "node:path";
 import { Type, type Static } from "typebox";
 import { OrbitalError } from "@henriquebastosnet/orbital";
 import { orbitalSettingsSchema, type SettingsSchema } from "@henriquebastosnet/orbital/settings";
@@ -67,8 +67,7 @@ const piPreferencesSchema: SettingsSchema<PiPreferences> = {
   },
 };
 
-// Shared settings resolve defaults, global values, one selected project, then environment overrides.
-// An empty or invalid repository marker still replaces the private project. No ancestors are searched.
+// Shared settings resolve defaults, global values, the one project directory, then environment overrides.
 // Lists replace earlier lists. Set and unset edit global files only. Pi preferences use pi.json.
 export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
   settings = createOrbitalConfiguration().settings,
@@ -120,9 +119,7 @@ export function createPiConfiguration(pi: ExtensionAPI, remoteProblem?: string,
       ...(error ? [`Error: ${error}`] : []),
       `Orbital settings: ${settings.filePath}`,
       `Saved: ${JSON.stringify(snapshot.saved)}`,
-      ...(settings.userProjectFilePath ? [`User project settings: ${settings.userProjectFilePath}`, `User project: ${JSON.stringify(snapshot.userProject)}`] : []),
-      ...(settings.projectFilePath ? [`Project settings: ${settings.projectFilePath}`, `Project: ${JSON.stringify(snapshot.project)}`] : []),
-      `Selected project: ${settings.selectedProjectFilePath ?? "none"}`,
+      ...(settings.projectFilePath ? [`Project directory: ${dirname(settings.projectFilePath)}`, `Project: ${JSON.stringify(snapshot.project)}`] : []),
       `Effective: ${JSON.stringify(snapshot.effective)}`,
       `Source: ${JSON.stringify(snapshot.source)}`,
       "Changes apply to the next allocation. Resource settings select the owned base for a new orb; existing orbs and explicit images retain their sizes.",

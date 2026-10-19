@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { createOrbitalConfiguration } from "../../src/configuration/orbital.js";
 import { projectPreparation } from "../../src/configuration/project.js";
+import { OrbitalError } from "../../src/operations.js";
 
 const canExecute = process.platform !== "win32" && spawnSync("python3", ["--version"]).status === 0;
 
@@ -86,69 +87,69 @@ test("preparation identity includes every file, path, and mode but not modificat
   } finally { await rm(directory, { recursive: true, force: true }); }
 });
 
-test("concurrent configuration reads retain the selected project from the completed snapshot", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "orbital-project-concurrent-"));
+test("preparation packages the default project directory when it exists and skips it when absent", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-project-default-"));
   const config = join(directory, "config");
   const cwd = join(directory, "backend");
   const repository = join(cwd, ".orbital");
-  const privateDirectory = join(config, "backend");
   try {
-    await mkdir(repository, { recursive: true });
-    await mkdir(privateDirectory, { recursive: true });
+    await mkdir(cwd, { recursive: true });
+    await mkdir(config, { recursive: true });
     await writeFile(join(config, "settings.json"), '{"memoryMB":2048}');
     const configuration = createOrbitalConfiguration({ directory: config, cwd, environment: {} });
-    const [absent] = await Promise.all([configuration.preparation(), configuration.resources()]);
+    assert.equal(configuration.projectDirectory, repository);
+    const [absent, resources] = await Promise.all([configuration.preparation(), configuration.resources()]);
     assert.equal(absent, undefined);
-    assert.equal(configuration.settings.selectedProjectFilePath, undefined);
-    await writeFile(join(privateDirectory, "settings.json"), '{"memoryMB":8192}');
-    for (const [selected, memoryMB] of [[privateDirectory, 8192], [repository, 2048]] as const) {
-      if (selected === repository) await writeFile(join(repository, "settings.json"), "{}");
-      const expected = await projectPreparation(selected);
-      const [preparation, resources] = await Promise.all([configuration.preparation(), configuration.resources()]);
-      assert.equal(preparation, expected);
-      assert.equal(resources.memoryMB, memoryMB);
-      const [reportedPath] = await Promise.all([
-        configuration.settings.refresh().then(() => configuration.settings.selectedProjectFilePath),
-        configuration.settings.refresh(),
-      ]);
-      assert.equal(reportedPath, join(selected, "settings.json"));
-    }
+    assert.equal(resources.memoryMB, 2048);
+    // A directory that holds only an executable build is packaged. No settings.json is needed.
+    await mkdir(repository);
+    await writeFile(join(repository, "build"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const buildOnly = await configuration.preparation();
+    assert.equal(buildOnly, await projectPreparation(repository));
+    assert.match(buildOnly!, /exec \.\/build/);
+    assert.equal(configuration.settings.snapshot().project, undefined);
+    await writeFile(join(repository, "settings.json"), '{"memoryMB":8192}');
+    const [preparation, withProject] = await Promise.all([configuration.preparation(), configuration.resources()]);
+    assert.equal(preparation, await projectPreparation(repository));
+    assert.equal(withProject.memoryMB, 8192);
     await writeFile(join(repository, "settings.json"), "INVALID_REPOSITORY");
     const results = await Promise.allSettled([configuration.preparation(), configuration.resources()]);
     for (const result of results) {
       assert.equal(result.status, "rejected");
       if (result.status === "rejected") assert.equal(result.reason.code, "configuration");
     }
-    assert.equal(configuration.settings.selectedProjectFilePath, join(repository, "settings.json"));
-  } finally { await rm(directory, { recursive: true, force: true }); }
-});
-
-test("project selection never mixes directories and rejects a broken repository marker without private fallback", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "orbital-project-selection-"));
-  const config = join(directory, "config");
-  const cwd = join(directory, "backend");
-  const repository = join(cwd, ".orbital");
-  const privateDirectory = join(config, "backend");
-  await mkdir(repository, { recursive: true });
-  await mkdir(privateDirectory, { recursive: true });
-  try {
-    const configuration = createOrbitalConfiguration({ directory: config, cwd, environment: {} });
-    assert.equal(await configuration.preparation(), undefined);
-    await writeFile(join(config, "settings.json"), '{"cpuCount":2,"memoryMB":2048}');
-    await writeFile(join(privateDirectory, "settings.json"), '{"cpuCount":8,"memoryMB":8192}');
-    await writeFile(join(privateDirectory, "private-only"), "private");
-    assert.equal(await configuration.preparation(), await projectPreparation(privateDirectory));
-    await writeFile(join(repository, "settings.json"), "{}");
-    assert.deepEqual(await configuration.resources(), { cpuCount: 2, memoryMB: 2048, minFreeDiskMb: undefined });
-    assert.equal(await configuration.preparation(), await projectPreparation(repository));
-    await writeFile(join(privateDirectory, "settings.json"), "INVALID_IGNORED_PRIVATE");
-    assert.deepEqual((await configuration.settings.refresh()).diagnostics, []);
-    await writeFile(join(repository, "settings.json"), "INVALID_REPOSITORY");
-    await assert.rejects(configuration.preparation(), { code: "configuration" });
-    assert.equal(configuration.settings.selectedProjectFilePath, join(repository, "settings.json"));
     await rm(join(repository, "settings.json"));
     await mkdir(join(repository, "settings.json"));
     await assert.rejects(configuration.preparation(), { code: "configuration" });
-    assert.equal(configuration.settings.selectedProjectFilePath, join(repository, "settings.json"));
+    await rm(join(repository, "settings.json"), { recursive: true });
+    await rm(repository, { recursive: true });
+    assert.equal(await configuration.preparation(), undefined);
+  } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+test("preparation requires an explicitly selected project directory to exist", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "orbital-project-explicit-"));
+  const cwd = join(directory, "backend");
+  const explicit = join(directory, "shared-project");
+  try {
+    await mkdir(cwd, { recursive: true });
+    for (const options of [
+      { environment: { ORBITAL_PROJECT_DIR: explicit } },
+      { environment: { ORBITAL_PROJECT_DIR: "../shared-project" } },
+      { projectDirectory: explicit, environment: {} },
+    ]) {
+      const configuration = createOrbitalConfiguration({ directory, cwd, ...options });
+      assert.equal(configuration.projectDirectory, explicit);
+      await assert.rejects(configuration.preparation(), (error: unknown) => {
+        assert.ok(error instanceof OrbitalError);
+        assert.equal(error.code, "configuration");
+        assert.match(error.message, new RegExp(explicit.replaceAll(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+        return true;
+      });
+    }
+    await mkdir(explicit);
+    await writeFile(join(explicit, "build"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const configuration = createOrbitalConfiguration({ directory, cwd, environment: { ORBITAL_PROJECT_DIR: explicit } });
+    assert.equal(await configuration.preparation(), await projectPreparation(explicit));
   } finally { await rm(directory, { recursive: true, force: true }); }
 });

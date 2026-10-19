@@ -93,31 +93,28 @@ test("invalid forwardEnv lists and project files report diagnostics without inpu
   assert.equal(resolveSettings(orbitalSettingsSchema, { project: [] }).diagnostics[0]?.source, "project");
 });
 
-test("repository settings select the whole project layer instead of private settings", () => {
+test("settings resolve exactly three layers: user, project, then environment", () => {
   const user = { memoryMB: 1024, forwardEnv: ["GLOBAL"] };
-  const userProject = { memoryMB: 8192, forwardEnv: ["PRIVATE", "PRIVATE"] };
   for (const [overrides, memoryMB, forwardEnv, source] of [
-    [{}, 8192, ["PRIVATE"], "userProject"],
+    [{}, 1024, ["GLOBAL"], "user"],
     [{ project: { memoryMB: 4096, forwardEnv: [] } }, 4096, [], "project"],
     [{ project: {} }, 1024, ["GLOBAL"], "user"],
     [{ project: { memoryMB: 4096 }, environment: { ORBITAL_MEMORY_MB: "2048", ORBITAL_FORWARD_ENV: "ENV" } }, 2048, ["ENV"], "environment"],
   ] as const) {
-    const result = resolveSettings(orbitalSettingsSchema, { user, userProject, ...overrides });
+    const result = resolveSettings(orbitalSettingsSchema, { user, ...overrides });
     assert.equal(result.effective.memoryMB, memoryMB);
     assert.deepEqual(result.effective.forwardEnv, forwardEnv);
     assert.equal(result.source.memoryMB, source);
     assert.equal(result.source.forwardEnv, source);
     assert.deepEqual(result.saved, user);
-    assert.deepEqual(result.userProject, "project" in overrides ? undefined : { memoryMB: 8192, forwardEnv: ["PRIVATE"] });
+    assert.deepEqual(result.project, "project" in overrides ? overrides.project : undefined);
+    assert.equal("userProject" in result, false);
     assert.deepEqual(result.diagnostics, []);
   }
-  const invalid = resolveSettings(orbitalSettingsSchema, {
-    user, userProject: { memoryMB: "PRIVATE_VALUE", extra: "PRIVATE_VALUE" }, project: { memoryMB: 4096 },
-  });
-  assert.equal(invalid.effective.memoryMB, 4096);
-  assert.deepEqual(invalid.diagnostics, []);
-  assert.doesNotMatch(JSON.stringify(invalid), /PRIVATE_VALUE/);
-  assert.equal(resolveSettings(orbitalSettingsSchema, { userProject: [] }).diagnostics[0]?.source, "userProject");
+  // @ts-expect-error The user-project layer no longer exists.
+  const ignored = resolveSettings(orbitalSettingsSchema, { user, userProject: { memoryMB: 8192 } });
+  assert.equal(ignored.effective.memoryMB, 1024);
+  assert.equal(ignored.source.memoryMB, "user");
 });
 
 test("the generic resolver accepts a separate host preference schema", () => {

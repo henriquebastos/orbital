@@ -8,16 +8,13 @@ export interface NodeSettingsOptions<T extends object> {
   schema: SettingsSchema<T>;
   directory?: string;
   fileName?: string;
-  userProjectFilePath?: string;
   projectFilePath?: string;
   environment?: Record<string, string | undefined>;
 }
 
 export interface NodeSettings<T extends object> {
   readonly filePath: string;
-  readonly userProjectFilePath?: string;
   readonly projectFilePath?: string;
-  readonly selectedProjectFilePath?: string;
   snapshot(): SettingsSnapshot<T>;
   refresh(): Promise<SettingsSnapshot<T>>;
   set<K extends keyof T>(key: K, value: T[K]): Promise<SettingsSnapshot<T>>;
@@ -72,15 +69,9 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
     throw new Error("The settings file name must be a single path segment.");
   }
   const filePath = join(directory, fileName);
-  const { userProjectFilePath, projectFilePath } = options;
-  const projectCandidates = [
-    { source: "project", path: projectFilePath },
-    { source: "userProject", path: userProjectFilePath },
-  ] as const;
-  for (const { path } of projectCandidates) {
-    if (path !== undefined && !isAbsolute(path)) throw new Error("The project settings path must be absolute.");
-  }
-  const projectValues: Pick<SettingsSources, "userProject" | "project"> = {};
+  const { projectFilePath } = options;
+  if (projectFilePath !== undefined && !isAbsolute(projectFilePath)) throw new Error("The project settings path must be absolute.");
+  const projectValues: Pick<SettingsSources, "project"> = {};
   let projectDiagnostics: SettingsDiagnostic[] = [];
   let loaded = false;
   let revision: string | undefined;
@@ -97,7 +88,6 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
       ...parsed.diagnostics,
       ...projectDiagnostics,
       ...current.diagnostics.map(diagnostic => diagnostic.source === "user" ? { ...diagnostic, path: filePath }
-        : diagnostic.source === "userProject" ? { ...diagnostic, path: userProjectFilePath }
         : diagnostic.source === "project" ? { ...diagnostic, path: projectFilePath } : diagnostic),
     ];
     // Only a file that cannot be rewritten safely blocks edits: unreadable, malformed, or not an
@@ -113,21 +103,19 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
     return serializeSettingsAccess(filePath, async () => {
       projectDiagnostics = [];
       delete projectValues.project;
-      delete projectValues.userProject;
-      for (const { source, path } of projectCandidates) {
-        if (path === undefined) continue;
+      // A missing project file is an empty project layer. An unreadable one is a project diagnostic.
+      if (projectFilePath !== undefined) {
         try {
-          const text = await readText(path);
-          if (text === undefined) continue;
-          const parsed = parseText(path, text, source);
-          projectValues[source] = parsed.user;
-          projectDiagnostics.push(...parsed.diagnostics);
+          const text = await readText(projectFilePath);
+          if (text !== undefined) {
+            const parsed = parseText(projectFilePath, text, "project");
+            projectValues.project = parsed.user;
+            projectDiagnostics.push(...parsed.diagnostics);
+          }
         } catch {
-          projectValues[source] = {};
-          projectDiagnostics.push({ source, path, message: "Cannot read project settings file." });
+          projectValues.project = {};
+          projectDiagnostics.push({ source: "project", path: projectFilePath, message: "Cannot read project settings file." });
         }
-        // A present or unreadable candidate selects the project directory. Do not merge or fall back.
-        break;
       }
       try {
         return updateSnapshotFromUserText(await readText(filePath));
@@ -170,11 +158,7 @@ export function createNodeSettings<T extends object>(options: NodeSettingsOption
 
   return {
     filePath,
-    userProjectFilePath,
     projectFilePath,
-    get selectedProjectFilePath() {
-      return current.project !== undefined ? projectFilePath : current.userProject !== undefined ? userProjectFilePath : undefined;
-    },
     snapshot,
     refresh,
     set: (key, value) => change(key, value, false),

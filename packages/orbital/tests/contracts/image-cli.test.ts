@@ -10,7 +10,8 @@ async function runCli(settings: string, args: string[], projectFiles: Record<str
   try {
     await mkdir(join(directory, "orbital"));
     await writeFile(join(directory, "orbital", "settings.json"), settings);
-    await mkdir(join(directory, ".orbital"));
+    // An existing .orbital directory is always packaged, so only create it when the case supplies project files.
+    if (Object.keys(projectFiles).length) await mkdir(join(directory, ".orbital"));
     for (const [name, content] of Object.entries(projectFiles)) await writeFile(join(directory, ".orbital", name), content, { mode: 0o644 });
     const environment: NodeJS.ProcessEnv = { ...process.env, E2B_API_KEY: "test-only", XDG_CONFIG_HOME: directory };
     delete environment.ORBITAL_IMAGE;

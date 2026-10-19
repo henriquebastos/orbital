@@ -57,15 +57,17 @@ It rejects missing variables and requires an explicitly selected, nonempty `E2B_
 `forwardEnv` stores names only. `ORBITAL_FORWARD_ENV` accepts a comma-separated list, including an empty list.
 Settings precedence, from lowest to highest, is:
 
-- Global: `~/.config/orbital/settings.json`.
-- One project: `<cwd>/.orbital/settings.json` when present. Otherwise `~/.config/orbital/<project-directory-name>/settings.json`.
+- User: `~/.config/orbital/settings.json`.
+- Project: `<project directory>/settings.json` when present.
 - Environment overrides.
 
 An absolute `XDG_CONFIG_HOME` replaces `~/.config`. Each defined list fully replaces the previous list.
-`cwd` defaults to the process startup directory and can be supplied to `createOrbitalConfiguration()`. Its final directory name selects the private project file. No ancestor directories are searched.
-Directories with the same name share a private project directory. For a checkout named `backend`, use `~/.config/orbital/backend/settings.json`.
-The selected project directory supplies all project settings and files. Repository and private directories never merge. An empty repository settings object still selects the repository directory. Invalid selected settings fail without fallback.
-`configuration.preparation()` reads every file in the selected directory and returns deterministic Bash preparation, or `undefined` when no project is selected. Pass it to `orbital.prepare()` or `orbital.create()`.
+There is one project directory. It is the `projectDirectory` option of `createOrbitalConfiguration()`, else `ORBITAL_PROJECT_DIR`, else `<cwd>/.orbital`.
+A relative value resolves against `cwd`. `cwd` defaults to the process startup directory and can be supplied as an option. No ancestor directories are searched.
+`configuration.projectDirectory` exposes the resolved path. A missing `settings.json` is an empty project layer. A malformed or unreadable one is a `project` diagnostic.
+`configuration.preparation()` reads every file in the project directory and returns deterministic Bash preparation. Pass it to `orbital.prepare()` or `orbital.create()`.
+It returns `undefined` when the default `<cwd>/.orbital` directory is absent. An absent explicit directory, from the option or the variable, fails with the `configuration` code.
+A directory that holds only an executable `build` is packaged. No `settings.json` is required.
 The CLI and Pi use project preparation automatically. The directory is copied to `/opt/orbital/project`, including `settings.json`, hidden files, and ignored files. Symbolic links are preserved without following their targets.
 An executable `build` runs there through its shebang. Optional `start` and `resume` executables are copied but are not invoked yet. No `run` hook is defined.
 Every file path, content, and Unix permission mode contributes to image identity. Keep credentials outside the project directory.
