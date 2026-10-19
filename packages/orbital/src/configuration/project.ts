@@ -10,7 +10,7 @@ type Entry = { path: string; mode: number } & (
 
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
 
-// Package the selected settings directory, not the checkout. Its deterministic script uses the image cache and recovery path.
+// Package the project directory, not the checkout. Its deterministic script uses the image cache and recovery path.
 export async function projectPreparation(projectDirectory: string, destination = "/opt/orbital/project"): Promise<string> {
   const entries: Entry[] = [];
   async function visit(path: string): Promise<void> {
@@ -32,7 +32,7 @@ export async function projectPreparation(projectDirectory: string, destination =
     await visit(".");
   } catch (cause) {
     if (cause instanceof OrbitalError) throw cause;
-    throw new OrbitalError("not_started", "configuration", "Cannot read the selected project directory.");
+    throw new OrbitalError("not_started", "configuration", "Cannot read the project directory.");
   }
   // Only build is invoked by the generated script. start and resume are reserved names for a
   // later lifecycle: they are copied and must already be executable, but nothing runs them here.

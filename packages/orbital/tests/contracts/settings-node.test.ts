@@ -113,6 +113,8 @@ test("the project directory is the option, then ORBITAL_PROJECT_DIR, then <cwd>/
     [{ environment: { ORBITAL_PROJECT_DIR: "/shared/project" } }, "/shared/project"],
     [{ projectDirectory: "/explicit/project", environment: { ORBITAL_PROJECT_DIR: "/shared/project" } }, "/explicit/project"],
     [{ projectDirectory: "explicit", environment: {} }, "/checkouts/backend/explicit"],
+    [{ projectDirectory: " ", environment: { ORBITAL_PROJECT_DIR: "rel" } }, "/checkouts/backend/rel"],
+    [{ projectDirectory: "", environment: {} }, "/checkouts/backend/.orbital"],
   ];
   for (const [options, expected] of cases) {
     const configuration = createOrbitalConfiguration({ directory: "/config/orbital", cwd, ...options });

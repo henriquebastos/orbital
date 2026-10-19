@@ -142,7 +142,7 @@ The command reads shared settings and environment overrides. `--image` overrides
 `--cache-directory` selects a different local cache. The default is `$XDG_CACHE_HOME/orbital/images` or `~/.cache/orbital/images`.
 It prints the result as JSON on stdout and progress on stderr. Ctrl-C requests cancellation.
 The source command `npm run image:build -- ...` uses this same implementation.
-The CLI and Pi automatically use the selected project directory for new images and allocations. Project preparation applies over the resolved base, including an explicit image override. Existing orbs are not changed.
+The CLI and Pi automatically use the project directory for new images and allocations. Project preparation applies over the resolved base, including an explicit image override. Existing orbs are not changed.
 `--preparation FILE` replaces automatic project preparation with the supplied Bash source. The lower-level library API still accepts explicit source and does not discover project files itself.
 
 ## 1d Cache and lifetime contract

@@ -18,8 +18,8 @@ export function createOrbitalConfiguration(options: {
   const directory = options.directory ?? settingsDirectory(environment);
   const cwd = resolve(options.cwd ?? process.cwd());
   // One project directory: the option, then ORBITAL_PROJECT_DIR, then <cwd>/.orbital. Only the default may be absent.
-  // A blank variable is unset, like XDG_CONFIG_HOME, so an empty value never packages the whole checkout.
-  const selectedProjectDirectory = options.projectDirectory ?? (environment.ORBITAL_PROJECT_DIR?.trim() ? environment.ORBITAL_PROJECT_DIR : undefined);
+  // A blank option or variable is unset, like XDG_CONFIG_HOME, so an empty value never packages the whole checkout.
+  const selectedProjectDirectory = [options.projectDirectory, environment.ORBITAL_PROJECT_DIR].find(value => value?.trim());
   const projectDirectory = resolve(cwd, selectedProjectDirectory ?? ".orbital");
   const settings = createNodeSettings({ schema: orbitalSettingsSchema, environment, directory,
     projectFilePath: join(projectDirectory, "settings.json") });

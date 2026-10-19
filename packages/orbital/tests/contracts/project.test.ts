@@ -106,7 +106,9 @@ test("preparation packages the default project directory when it exists and skip
     await writeFile(join(repository, "build"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     const buildOnly = await configuration.preparation();
     assert.equal(buildOnly, await projectPreparation(repository));
-    assert.match(buildOnly!, /exec \.\/build/);
+    const payload = /b64decode\("([^"]+)"\)/.exec(buildOnly!)?.[1];
+    const bundle = JSON.parse(Buffer.from(payload!, "base64").toString("utf8")) as { entries: { path: string; mode: number }[] };
+    assert.deepEqual(bundle.entries.filter(entry => entry.path === "build").map(entry => entry.mode), [0o755]);
     assert.equal(configuration.settings.snapshot().project, undefined);
     await writeFile(join(repository, "settings.json"), '{"memoryMB":8192}');
     const [preparation, withProject] = await Promise.all([configuration.preparation(), configuration.resources()]);

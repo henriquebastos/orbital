@@ -311,11 +311,7 @@ async function cleanupRemote(): Promise<void> {
     if (typeof record.generationName === "string") intentNames.add(record.generationName);
     for (const field of ["artifact", "base"] as const) {
       const item = record[field];
-      if (item && typeof item === "object" && "reference" in item && typeof item.reference === "string") {
-        const colon = item.reference.lastIndexOf(":");
-        const slash = item.reference.lastIndexOf("/");
-        artifacts.add(colon > slash ? item.reference.slice(0, colon) : item.reference);
-      }
+      if (item && typeof item === "object" && "name" in item && typeof item.name === "string") artifacts.add(item.name);
     }
   }
   for (const attemptId of attemptIds) {
