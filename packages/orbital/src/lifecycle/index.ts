@@ -3,7 +3,7 @@ import type { Provider } from "../provider.js";
 import type { ImageRequest, Images, PrepareRequest } from "./images/types.js";
 import { assertCreationMatches, creationIntent, normalizeImageRequest } from "./creation.js";
 import { Workspace } from "../workspace.js";
-import { decideDemand } from "../orb.js";
+import { decideDemand, type CreationIntent, type OrbSnapshot } from "../orb.js";
 import { validateEnvironment } from "../environment.js";
 
 export interface CreateRequest extends ImageRequest {
@@ -17,6 +17,17 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
   function requireId(orbId: string) {
     if (!orbId?.trim()) throw new OrbitalError("not_started", "invalid_id", "orbId is required.");
   }
+  // Reuse an existing Orb: compare its saved intent, wake it when needed, and report a wake that cancellation followed.
+  async function attach(existing: OrbSnapshot, intent: CreationIntent, leaseWindowMs: number, observer: Observer): Promise<OrbSnapshot> {
+    assertCreationMatches(existing, intent, leaseWindowMs);
+    if (existing.state === "sleeping") {
+      await configuration.provider.resume(existing);
+    }
+    if (observer.signal?.aborted) {
+      throw new OrbitalError("uncertain", "creation_cancelled", "Cancellation followed demand wake. The existing allocation remains.", { orbId: existing.orbId, resourceId: existing.resourceId });
+    }
+    return { ...existing, state: "running" };
+  }
   return {
     async prepare(request: PrepareRequest = {}, observer: Observer = {}) {
       checkCancellation(observer);
@@ -28,7 +39,7 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
       checkCancellation(observer);
       validateEnvironment(request.env);
       // Provider admission (for E2B, the renewal key) fails before lookup, reuse, or image work.
-      configuration.provider.admitEnvironment?.(request.env);
+      configuration.provider.admitEnvironment(request.env);
       request = { ...request, env: request.env === undefined ? undefined : { ...request.env } };
       requireId(request.orbId);
       if (!Number.isSafeInteger(request.leaseWindowMs) || request.leaseWindowMs < 3) {
@@ -38,22 +49,18 @@ export function createOrbital(configuration: { provider: Provider; images?: Imag
       const intent = creationIntent(imageRequest);
       const existing = await configuration.provider.resolve(request.orbId);
       checkCancellation(observer);
-      if (existing) {
-        assertCreationMatches(existing, intent, request.leaseWindowMs);
-        if (existing.state === "sleeping") {
-          await configuration.provider.resume(existing);
-        }
-        if (observer.signal?.aborted) {
-          throw new OrbitalError("uncertain", "creation_cancelled", "Cancellation followed demand wake. The existing allocation remains.", { orbId: existing.orbId, resourceId: existing.resourceId });
-        }
-        return { ...existing, state: "running" as const };
-      }
+      if (existing) return attach(existing, intent, request.leaseWindowMs, observer);
       let image = imageRequest.image;
       if (configuration.images) image = (await configuration.images.ensure(imageRequest, observer)).reference;
       else if (image === undefined || imageRequest.preparation !== undefined) {
         throw new OrbitalError("not_started", "image_manager_unavailable", "Default images and preparation require an image manager.");
       }
       checkCancellation(observer);
+      // Image work can be long. A concurrent create may have allocated this Orb ID meanwhile, so resolve again
+      // immediately before allocating. The provider's create does not look up existing Orbs.
+      const concurrent = await configuration.provider.resolve(request.orbId);
+      checkCancellation(observer);
+      if (concurrent) return attach(concurrent, intent, request.leaseWindowMs, observer);
       const orb = await configuration.provider.create({ orbId: request.orbId, leaseWindowMs: request.leaseWindowMs,
         image: image!, creationIntent: intent, env: request.env }, observer);
       if (observer.signal?.aborted) {

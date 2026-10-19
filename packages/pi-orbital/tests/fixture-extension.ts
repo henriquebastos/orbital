@@ -17,6 +17,7 @@ export default function fixtureExtension(pi: ExtensionAPI): void {
     return resolve(orbRoot, `.${remotePath.slice("/home/user".length)}`);
   };
   const provider: Provider = {
+    admitEnvironment() {},
     async resolve(orbId) {
       if (process.env.ORBITAL_PI_FAULT === "lookup") throw new Error("Fixture lookup is unavailable.");
       if (!existsSync(snapshotPath)) return undefined;
@@ -29,7 +30,7 @@ export default function fixtureExtension(pi: ExtensionAPI): void {
       if (process.env.ORBITAL_PI_CREATE_DELAY) await new Promise(done => setTimeout(done, 100));
       mkdirSync(orbRoot, { recursive: true });
       const snapshot: OrbSnapshot = { orbId: request.orbId, resourceId: randomUUID(),
-        image: request.image, state: "running", leaseWindowMs: request.leaseWindowMs };
+        image: request.image, state: "running", leaseWindowMs: request.leaseWindowMs, creationIntent: request.creationIntent };
       writeFileSync(snapshotPath, JSON.stringify(snapshot));
       if (process.env.ORBITAL_PI_FAULT === "creation") {
         throw new OrbitalError("uncertain", "fixture_creation_lost", "The allocation reply was lost.");

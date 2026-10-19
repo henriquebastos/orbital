@@ -6,6 +6,7 @@ export class SimulatedProvider implements Provider {
   effects: string[] = [];
   fault?: "reject" | "lose_command" | "lose_write";
   beforeRead?: () => Promise<void>;
+  admitEnvironment() {}
   async resolve(orbId: string) { return this.orbs.find(orb => orb.orbId === orbId); }
   async create(request: AllocationRequest) {
     const { env: _env, ...identity } = request;

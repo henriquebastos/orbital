@@ -1,3 +1,7 @@
+/**
+ * A live Orb observed through its provider. An allocation without saved creation intent is invalid metadata,
+ * so, like a duplicate Orb ID, it is not reachable or deletable through Orbital.
+ */
 export interface OrbSnapshot {
   orbId: string;
   resourceId: string;
@@ -6,7 +10,7 @@ export interface OrbSnapshot {
   leaseWindowMs: number;
   sandboxDomain?: string;
   resources?: { cpuCount: number; memoryMB: number };
-  creationIntent?: CreationIntent;
+  creationIntent: CreationIntent;
 }
 
 export interface CreationIntent {

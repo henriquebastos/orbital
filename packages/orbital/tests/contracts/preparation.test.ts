@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 
-import { createOrbital, OrbitalError, type Images, type PrepareRequest } from "@henriquebastosnet/orbital";
+import { createOrbital, OrbitalError, type Images, type OrbSnapshot, type PrepareRequest } from "@henriquebastosnet/orbital";
+import { assertCreationMatches } from "../../src/lifecycle/creation.js";
 import { SimulatedProvider } from "../../../../tests/support/provider.js";
 
 function imageManager(reference = "prepared-image") {
@@ -20,7 +21,9 @@ const request = { orbId: "session-1", leaseWindowMs: 60_000 };
 
 test("unsupported lease windows fail before image preparation or provider lookup", async () => {
   const manager = imageManager();
-  const orbital = createOrbital({ provider: {} as never, images: manager.images });
+  const provider = new SimulatedProvider();
+  provider.resolve = async () => { throw new Error("Unexpected lookup"); };
+  const orbital = createOrbital({ provider, images: manager.images });
   for (const leaseWindowMs of [1, 2]) {
     await assert.rejects(orbital.create({ ...request, leaseWindowMs }), { code: "invalid_create" });
   }
@@ -81,19 +84,53 @@ test("a default creation reuses an existing orb even when a new default image is
   assert.equal(provider.orbs.length, 1);
 });
 
-test("legacy metadata permits the original explicit image but rejects default and prepared requests", async () => {
+test("an Orb that appears during preparation is attached and the prepared image is unused", async () => {
   const provider = new SimulatedProvider();
-  provider.orbs.push({ orbId: request.orbId, resourceId: "legacy", image: "legacy-image",
-    state: "running", leaseWindowMs: request.leaseWindowMs });
+  const concurrent: OrbSnapshot = { orbId: request.orbId, resourceId: "concurrent", image: "prepared-elsewhere",
+    state: "sleeping", leaseWindowMs: request.leaseWindowMs, creationIntent: {} };
+  let lookups = 0;
+  provider.resolve = async () => (lookups += 1) === 1 ? undefined : concurrent;
   const manager = imageManager();
   const orbital = createOrbital({ provider, images: manager.images });
-  assert.equal((await orbital.create({ ...request, image: "legacy-image" })).resourceId, "legacy");
-  for (const options of [{}, { image: "legacy-image", preparation: "true" }]) {
-    await assert.rejects(orbital.create({ ...request, ...options }),
-      { outcome: "not_started", code: "legacy_creation_intent_unknown" });
-  }
-  assert.deepEqual(manager.requests, []);
+  const attached = await orbital.create(request);
+  assert.equal(lookups, 2);
+  assert.equal(attached.resourceId, "concurrent");
+  assert.equal(attached.image, "prepared-elsewhere");
+  assert.equal(attached.state, "running");
+  assert.equal(manager.requests.length, 1);
+  assert.deepEqual(provider.effects, ["resume:concurrent"]);
+});
+
+test("a conflicting Orb that appears during preparation rejects the allocation", async () => {
+  const provider = new SimulatedProvider();
+  const concurrent: OrbSnapshot = { orbId: request.orbId, resourceId: "concurrent", image: "other-image",
+    state: "sleeping", leaseWindowMs: request.leaseWindowMs, creationIntent: { image: "other-image" } };
+  let lookups = 0;
+  provider.resolve = async () => (lookups += 1) === 1 ? undefined : concurrent;
+  const orbital = createOrbital({ provider, images: imageManager().images });
+  await assert.rejects(orbital.create(request), { outcome: "not_started", code: "conflict" });
+  assert.equal(lookups, 2);
   assert.deepEqual(provider.effects, []);
+});
+
+test("creation intent mismatches on image, preparation hash, and lease window are conflicts", () => {
+  const hash = "a".repeat(64);
+  const orb: OrbSnapshot = { orbId: request.orbId, resourceId: "existing", image: "prepared-image",
+    state: "running", leaseWindowMs: 60_000, creationIntent: { image: "base-image", preparationHash: hash } };
+  assertCreationMatches(orb, { image: "base-image", preparationHash: hash }, 60_000);
+  const mismatches: Array<[Parameters<typeof assertCreationMatches>[1], number]> = [
+    [{ image: "prepared-image", preparationHash: hash }, 60_000],
+    [{ image: "base-image", preparationHash: "b".repeat(64) }, 60_000],
+    [{ image: "base-image" }, 60_000],
+    [{ image: "base-image", preparationHash: hash }, 30_000],
+  ];
+  for (const [intent, leaseWindowMs] of mismatches) {
+    assert.throws(() => assertCreationMatches(orb, intent, leaseWindowMs), { outcome: "not_started", code: "conflict" });
+  }
+  // @ts-expect-error An Orb without saved creation intent is not representable, so no legacy branch exists.
+  const legacy: OrbSnapshot = { orbId: request.orbId, resourceId: "legacy", image: "legacy-image",
+    state: "running", leaseWindowMs: 60_000 };
+  assert.equal(legacy.creationIntent, undefined);
 });
 
 test("a failed or cancelled preparation cannot submit an allocation", async () => {
@@ -114,15 +151,19 @@ test("a failed or cancelled preparation cannot submit an allocation", async () =
 
 test("creation captures the caller's request before provider lookup awaits", async () => {
   const provider = new SimulatedProvider();
-  let finishLookup!: () => void;
-  provider.resolve = async () => { await new Promise<void>(done => { finishLookup = done; }); return undefined; };
+  // Only the first lookup blocks. The second lookup, after image work, returns at once.
+  let finishLookup: (() => void) | undefined;
+  provider.resolve = async () => {
+    if (!finishLookup) await new Promise<void>(done => { finishLookup = done; });
+    return undefined;
+  };
   const manager = imageManager();
   const orbital = createOrbital({ provider, images: manager.images });
   const mutable = { ...request, image: "original-base", preparation: "echo original" };
   const pending = orbital.create(mutable);
   mutable.image = "changed-base";
   mutable.preparation = "echo changed";
-  finishLookup();
+  finishLookup!();
   const created = await pending;
   assert.deepEqual(manager.requests, [{ image: "original-base", preparation: "echo original" }]);
   assert.equal(created.creationIntent?.image, "original-base");

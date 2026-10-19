@@ -296,7 +296,8 @@ async function cancelCase(directory: string, trace: Record<string, unknown>[], s
 
 async function earlyCase(_directory: string, trace: Record<string, unknown>[], setOwned: (orb: OrbSnapshot) => void) {
   const orbId = `orbital-lifetime-early-${runId}`;
-  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! } });
+  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! },
+    creationIntent: { image: image! } });
   setOwned(orb);
   trace.push({ event: "created", orbId, resourceId: orb.resourceId });
   const token = `ORBITAL_EARLY_${randomUUID()}`;
@@ -319,7 +320,8 @@ async function earlyCase(_directory: string, trace: Record<string, unknown>[], s
 
 async function admissionCase(_directory: string, trace: Record<string, unknown>[], setOwned: (orb: OrbSnapshot) => void) {
   const orbId = `orbital-lifetime-admission-${runId}`;
-  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! } });
+  const orb = await provider!.create({ orbId, image: image!, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey! },
+    creationIntent: { image: image! } });
   setOwned(orb);
   trace.push({ event: "created", orbId, resourceId: orb.resourceId });
   const reference = await Sandbox.connect(orb.resourceId, { apiKey: apiKey!, timeoutMs: orb.leaseWindowMs });

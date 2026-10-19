@@ -111,7 +111,7 @@ See [image preparation](docs/image-preparation.md) for the API and cache lifecyc
 | `src/workspace.ts` | Commands and file operations in a selected Orb directory. |
 | `src/configuration/` | Shared settings, precedence, validation, and local settings storage. |
 | `src/e2b/` | E2B adapters for live Orbs, image identity, the base recipe, and image operations. |
-| `src/provider.ts` | The provider contract for external Orb operations. |
+| `src/provider.ts` | The provider contract for external Orb operations. Its `create` only allocates. The lifecycle owns reuse. |
 | `src/operations.ts` | Progress, cancellation, and operation errors. |
 | `src/cli/image.ts` | The image preparation command. |
 

@@ -6,15 +6,19 @@ export interface AllocationRequest {
   orbId: string;
   image: string;
   leaseWindowMs: number;
-  creationIntent?: CreationIntent;
+  creationIntent: CreationIntent;
   env?: Record<string, string>;
 }
 
 /** Remote effects and provider admission rules. Neither adapters nor callers retry uncertain mutations automatically. */
 export interface Provider {
   /** Provider-specific admission for a new allocation's environment, checked before any lookup or image work. */
-  admitEnvironment?(env: Record<string, string> | undefined): void;
+  admitEnvironment(env: Record<string, string> | undefined): void;
   resolve(orbId: string): Promise<OrbSnapshot | undefined>;
+  /**
+   * Allocate a new Orb. Precondition: the caller resolved immediately before this call that no Orb with this ID
+   * exists. The adapter does not look up, compare, or resume an existing Orb. The lifecycle owns reuse.
+   */
   create(request: AllocationRequest, observer?: Observer): Promise<OrbSnapshot>;
   resume(orb: OrbSnapshot): Promise<void>;
   delete(orb: OrbSnapshot): Promise<void>;

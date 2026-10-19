@@ -25,11 +25,7 @@ export function creationIntent(request: ImageRequest): CreationIntent {
 
 // Reuse compares original image and preparation intent and lease window, not environment or current image resources.
 export function assertCreationMatches(orb: OrbSnapshot, intent: CreationIntent, leaseWindowMs: number): void {
-  if (!orb.creationIntent && (intent.image === undefined || intent.preparationHash !== undefined)) {
-    throw new OrbitalError("not_started", "legacy_creation_intent_unknown",
-      "This Orb has no saved creation intent. Attach explicitly or use its original image reference.", { orbId: orb.orbId });
-  }
-  const expected = orb.creationIntent ?? { image: orb.image };
+  const expected = orb.creationIntent;
   if (expected.image !== intent.image || expected.preparationHash !== intent.preparationHash || orb.leaseWindowMs !== leaseWindowMs) {
     throw new OrbitalError("not_started", "conflict", "Creation settings conflict with the existing orb.", { orbId: orb.orbId });
   }

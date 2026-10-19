@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createOrbital } from "@henriquebastosnet/orbital";
+import { createOrbital, type AllocationRequest } from "@henriquebastosnet/orbital";
 import { SimulatedProvider } from "../../../../tests/support/provider.js";
 
 test("creation requires an explicit orb ID before contacting the provider", async () => {
-  const orbital = createOrbital({ provider: {} as never });
+  const provider = new SimulatedProvider();
+  provider.resolve = async () => { throw new Error("Unexpected lookup"); };
+  const orbital = createOrbital({ provider });
   await assert.rejects(orbital.create({ orbId: "", image: "test-image", leaseWindowMs: 60000 }), /orbId/);
 });
 
@@ -70,6 +72,21 @@ test("retrying a known identity reuses its allocation and rejects an image confl
   assert.equal(second.resourceId, first.resourceId);
   await assert.rejects(orbital.create({ ...request, image: "different-image" }), /conflict/i);
   assert.equal(provider.orbs.length, 1);
+});
+
+test("allocation resolves the Orb ID twice and sends the creation intent to the provider", async () => {
+  const provider = new SimulatedProvider();
+  let lookups = 0;
+  const resolve = provider.resolve.bind(provider);
+  provider.resolve = async orbId => { lookups += 1; return resolve(orbId); };
+  const allocations: AllocationRequest[] = [];
+  const create = provider.create.bind(provider);
+  provider.create = async request => { allocations.push(request); return create(request); };
+  const orbital = createOrbital({ provider });
+  await orbital.create({ orbId: "pi-session", image: "test-image", leaseWindowMs: 60000 });
+  assert.equal(lookups, 2);
+  assert.deepEqual(allocations.map(allocation => allocation.creationIntent), [{ image: "test-image" }]);
+  assert.deepEqual(provider.effects, ["create:allocation-1"]);
 });
 
 test("remote bytes preserve literal paths and edit changes exactly one match", async () => {

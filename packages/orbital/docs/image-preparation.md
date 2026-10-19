@@ -48,7 +48,8 @@ Creation follows this order:
 - If the Orb exists and matches, wake it when needed and return it.
 - Otherwise, resolve the base and look for a ready preparation image.
 - On a miss, prepare a temporary seed, check the runtime, capture the image, and publish its receipt.
-- Allocate the live Orb with its own identity, lease window, and renewal credential.
+- Resolve the Orb ID again. An Orb that a concurrent creation allocated meanwhile is attached and the prepared image is unused.
+- Allocate the live Orb with its own identity, lease window, and renewal credential. The provider only allocates. It does not look up, compare, or resume.
 - Return the Orb. The caller can now clone repositories and install project dependencies.
 
 Preparation returns `{ reference, baseReference, cacheKey, reused }`.
@@ -157,7 +158,7 @@ Changing external downloads does not change the script hash. Use explicit refres
 An existing Orb stores creation intent separately from its allocated image reference.
 An unchanged default request reuses that Orb after a base upgrade or cache refresh.
 A changed script or image selector conflicts with the existing Orb. Use another Orb ID or recreate it deliberately.
-Legacy Orbs remain attachable. Creation can reuse one only with its matching explicit image and no preparation.
+Every Orb saves its creation intent. A sandbox without one is invalid metadata and is not reachable through Orbital.
 
 Provider-only library construction still supports explicit-image creation without preparation.
 Default-image creation and `prepare()` require the Images adapter.
@@ -167,7 +168,7 @@ Default-image creation and `prepare()` require the Images adapter.
 | Module | Responsibility |
 | --- | --- |
 | `lifecycle/creation.ts` | Validate image inputs and compare creation intent. |
-| `lifecycle/index.ts` | Resolve existing Orbs before image work and allocate after preparation. |
+| `lifecycle/index.ts` | Own Orb reuse. Resolve before image work, resolve again after preparation, and allocate only when no Orb exists. |
 | `lifecycle/images/preparation.ts` | Order cache lookup, preparation, publication, and cleanup. |
 | `e2b/image-registry.ts` | Resolve one reference, which may name a captured snapshot, a template alias, a tag, or a build, to one pinned build. |
 | `e2b/images.ts` | Build bases, execute preparation seeds, and capture images. |

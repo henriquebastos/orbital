@@ -8,6 +8,7 @@ import { createPiConfiguration } from "./preferences.js";
 function unavailableProvider(message: string): Provider {
   const unavailable = (): never => { throw new Error(message); };
   return {
+    admitEnvironment: () => unavailable(),
     resolve: async () => unavailable(), create: async () => unavailable(),
     resume: async () => unavailable(), delete: async () => unavailable(),
     url: () => unavailable(), exec: async () => unavailable(),

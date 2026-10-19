@@ -8,7 +8,7 @@ import { SimulatedProvider } from "../../../tests/support/provider.js";
 async function fixture(beforeOpen?: (observer: Observer) => Promise<void>) {
   const provider = new SimulatedProvider();
   provider.orbs.push({ orbId: "agent-original", resourceId: "allocation-1", image: "fixture-image",
-    state: "running", leaseWindowMs: 60000 });
+    state: "running", leaseWindowMs: 60000, creationIntent: { image: "fixture-image" } });
   provider.files.set("allocation-1:/home/user/note.txt", Buffer.from("original"));
   provider.files.set("allocation-1:/home/user/.orbital/jobs/job-1/output", Buffer.from(""));
   const orbital = createOrbital({ provider });

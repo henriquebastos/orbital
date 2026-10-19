@@ -15,7 +15,6 @@ import { OrbitalError, type Observer } from "../operations.js";
 import type { AllocationRequest, Provider } from "../provider.js";
 import type { CreationIntent, OrbSnapshot } from "../orb.js";
 import type { ExecRequest, ExecResult } from "../workspace.js";
-import { assertCreationMatches } from "../lifecycle/creation.js";
 import { validateEnvironment } from "../environment.js";
 
 const ORB_ID = "orbital_v2_orb_id";
@@ -91,22 +90,22 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
     throw error("not_started", "invalid_metadata", "The E2B sandbox has invalid Orbital metadata.",
       { resourceId: info.sandboxId });
   }
-  let creationIntent: CreationIntent | undefined;
-  const rawIntent = info.metadata[CREATION_INTENT];
-  if (rawIntent !== undefined) {
-    try {
-      const value: unknown = JSON.parse(rawIntent);
-      if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid intent");
-      const intent = value as Record<string, unknown>;
-      if (Object.keys(intent).some(key => key !== "image" && key !== "preparationHash") ||
-        (intent.image !== undefined && (typeof intent.image !== "string" || !intent.image.trim())) ||
-        (intent.preparationHash !== undefined && (typeof intent.preparationHash !== "string" || !/^[a-f0-9]{64}$/.test(intent.preparationHash)))) {
-        throw new Error("Invalid intent");
-      }
-      creationIntent = intent as CreationIntent;
-    } catch {
-      throw error("not_started", "invalid_metadata", "The E2B sandbox has invalid creation intent.", { resourceId: info.sandboxId });
+  // Every Orbital allocation saves its creation intent. A sandbox without one is not an Orbital Orb.
+  let creationIntent: CreationIntent;
+  try {
+    const rawIntent = info.metadata[CREATION_INTENT];
+    if (rawIntent === undefined) throw new Error("Missing intent");
+    const value: unknown = JSON.parse(rawIntent);
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Invalid intent");
+    const intent = value as Record<string, unknown>;
+    if (Object.keys(intent).some(key => key !== "image" && key !== "preparationHash") ||
+      (intent.image !== undefined && (typeof intent.image !== "string" || !intent.image.trim())) ||
+      (intent.preparationHash !== undefined && (typeof intent.preparationHash !== "string" || !/^[a-f0-9]{64}$/.test(intent.preparationHash)))) {
+      throw new Error("Invalid intent");
     }
+    creationIntent = intent as CreationIntent;
+  } catch {
+    throw error("not_started", "invalid_metadata", "The E2B sandbox has missing or invalid creation intent.", { resourceId: info.sandboxId });
   }
   return {
     orbId,
@@ -116,7 +115,7 @@ function snapshot(info: SandboxInfo): OrbSnapshot {
     leaseWindowMs,
     sandboxDomain: info.sandboxDomain,
     resources: { cpuCount: info.cpuCount, memoryMB: info.memoryMB },
-    ...(creationIntent === undefined ? {} : { creationIntent }),
+    creationIntent,
   };
 }
 
@@ -232,28 +231,11 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     }
   }
 
-  // This adapter is also callable directly, so it checks admission and existing intent before allocating.
+  // Allocation only. The lifecycle resolved this Orb ID just before calling and owns reuse (Provider.create).
   async function create(request: AllocationRequest, observer?: Observer): Promise<OrbSnapshot> {
     validateCreate(request);
     if (observer?.signal?.aborted) {
       throw error("not_started", "cancelled_before_create", "Creation was cancelled before the request.");
-    }
-    const prior = await resolve(request.orbId);
-    if (observer?.signal?.aborted) {
-      throw error("not_started", "cancelled_before_create", "Creation was cancelled before the request.");
-    }
-    if (prior) {
-      try {
-        assertCreationMatches(prior, request.creationIntent ?? { image: request.image }, request.leaseWindowMs);
-      } catch (cause) {
-        if (cause instanceof OrbitalError && cause.code === "conflict") {
-          throw error("not_started", "orb_conflict", "The Orb ID already uses different creation settings.",
-            { orbId: request.orbId, resourceId: prior.resourceId });
-        }
-        throw cause;
-      }
-      if (prior.state === "sleeping") await resume(prior);
-      return { ...prior, state: "running" };
     }
     observer?.onProgress?.({ phase: "creating", orbId: request.orbId });
     let sandbox: Sandbox;
@@ -265,7 +247,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           [ORB_ID]: request.orbId,
           [IMAGE]: request.image,
           [LEASE_MS]: String(request.leaseWindowMs),
-          ...(request.creationIntent === undefined ? {} : { [CREATION_INTENT]: JSON.stringify(request.creationIntent) }),
+          [CREATION_INTENT]: JSON.stringify(request.creationIntent),
         },
         envs: { ...request.env },
         lifecycle: { onTimeout: "pause", autoResume: true },

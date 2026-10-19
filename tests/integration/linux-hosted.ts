@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import { createE2BProvider, OrbitalError, type OrbSnapshot } from "@henriquebastosnet/orbital";
+import { createE2BProvider, createOrbital, OrbitalError, type OrbSnapshot } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
 import { hostedConfiguration } from "../support/hosted-configuration.js";
 import { assertLinuxSuitePassed } from "../support/linux-suite.js";
@@ -48,18 +48,20 @@ async function main(): Promise<void> {
   record("start", { image, orbId, e2bSdk: "2.51.0" });
   try {
     assert.equal(await provider.resolve(orbId), undefined);
+    // Reuse belongs to the lifecycle. A direct provider.create would allocate a duplicate sandbox.
+    const orbital = createOrbital({ provider });
     createSubmitted = true;
-    owned = await provider.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
+    owned = await orbital.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
     record("created", { resourceId: owned.resourceId, state: owned.state,
       sandboxDomain: owned.sandboxDomain });
     assert.equal(owned.orbId, orbId);
     assert.equal(owned.image, image);
     assert.equal((await provider.resolve(orbId))?.resourceId, owned.resourceId);
-    const repeated = await provider.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
+    const repeated = await orbital.create({ orbId, image, leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } });
     assert.equal(repeated.resourceId, owned.resourceId);
     await assert.rejects(
-      provider.create({ orbId, image: "base", leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } }),
-      (cause) => cause instanceof OrbitalError && cause.code === "orb_conflict" && cause.outcome === "not_started",
+      orbital.create({ orbId, image: "base", leaseWindowMs: 30_000, env: { E2B_API_KEY: apiKey } }),
+      (cause) => cause instanceof OrbitalError && cause.code === "conflict" && cause.outcome === "not_started",
     );
     record("identity_policy_passed", { resourceId: owned.resourceId });
 
