@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createOrbital, createE2BProvider } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
 import { hostedConfiguration } from "../support/hosted-configuration.js";
+import { hostEnvironment } from "../support/pi-environment.js";
 
 interface RpcEvent {
   id?: string;
@@ -32,7 +33,7 @@ mkdirSync(receiptDirectory, { recursive: true });
 mkdirSync(configDirectory, { recursive: true });
 writeFileSync(resolve(configDirectory, "settings.json"), JSON.stringify({ image, leaseWindowMs: 30000 }) + "\n");
 writeFileSync(resolve(configDirectory, "pi.json"), JSON.stringify({ autoOn: false, skillRoots: [] }) + "\n");
-const env: NodeJS.ProcessEnv = { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
+const env: NodeJS.ProcessEnv = { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
   XDG_CONFIG_HOME: resolve(directory, "config"), ORBITAL_AUTO_ON: "false", ORBITAL_FORWARD_ENV: "E2B_API_KEY" };
 delete env.ORBITAL_IMAGE;
 delete env.ORBITAL_LEASE_WINDOW_MS;

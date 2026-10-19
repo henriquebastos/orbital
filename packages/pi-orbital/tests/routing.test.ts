@@ -7,6 +7,7 @@ import test from "node:test";
 import { createOrbital } from "@henriquebastosnet/orbital";
 import { createPiSession } from "../src/session.js";
 import { SimulatedProvider } from "../../../tests/support/provider.js";
+import { hostEnvironment } from "../../../tests/support/pi-environment.js";
 
 type Response = { type: string; id?: string; success?: boolean; error?: string; data?: any };
 
@@ -15,7 +16,7 @@ function start(dir: string, extra: Record<string, string> = {}) {
     "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve", "--extension",
     resolve("packages/pi-orbital/tests/fixture-extension.ts"), "--provider", "orbital-fixture", "--model", "probe",
     "--mode", "rpc", "--session", resolve(dir, "session.jsonl")], {
-    cwd: dir, env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"),
+    cwd: dir, env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"),
       ORBITAL_PI_FIXTURE_ROOT: dir, ...extra },
   });
   let sequence = 0;

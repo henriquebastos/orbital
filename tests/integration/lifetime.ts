@@ -11,6 +11,7 @@ import { Sandbox } from "e2b";
 import { createE2BProvider, type OrbSnapshot } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
 import { hostedConfiguration } from "../support/hosted-configuration.js";
+import { hostEnvironment } from "../support/pi-environment.js";
 
 type CaseName = "silent" | "timeout" | "cancel" | "early" | "admission";
 interface Call { name: string; arguments: Record<string, unknown> }
@@ -76,7 +77,7 @@ function startPi(directory: string, calls: Call[], mode: "json" | "rpc"): PiRun 
   if (mode === "json") args.push("--print", "Run the fixed fixture.");
   const child = spawn(resolve("node_modules/.bin/pi"), args, {
     cwd: directory,
-    env: { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
+    env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
       ORBITAL_PI_CALLS: JSON.stringify(calls), ORBITAL_IMAGE: image,
       ORBITAL_LEASE_WINDOW_MS: "30000", ORBITAL_FORWARD_ENV: "E2B_API_KEY" },
     stdio: [mode === "json" ? "ignore" : "pipe", "pipe", "pipe"],

@@ -4,12 +4,13 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { saveReceipt } from "../support/receipts.js";
+import { hostEnvironment } from "../support/pi-environment.js";
 
 const root = resolve(".");
 const pi = resolve("node_modules/.bin/pi");
 const directory = mkdtempSync(resolve(tmpdir(), "orbital-install-"));
 const checks: string[] = [];
-const env = { ...process.env, XDG_CONFIG_HOME: resolve(directory, "config"),
+const env = { ...hostEnvironment, XDG_CONFIG_HOME: resolve(directory, "config"),
   E2B_API_KEY: "", ORBITAL_IMAGE: "install-fixture",
   ORBITAL_AUTO_ON: "false", ORBITAL_PI_CALLS_FILE: "" };
 let failure: string | undefined;

@@ -6,6 +6,7 @@ import { resolve } from "node:path";
 import { createOrbital, createE2BProvider } from "@henriquebastosnet/orbital";
 import { saveReceipt } from "../support/receipts.js";
 import { hostedConfiguration } from "../support/hosted-configuration.js";
+import { hostEnvironment } from "../support/pi-environment.js";
 
 interface Call { name: string; arguments: Record<string, unknown> }
 interface PiEvent { type: string; toolName?: string; isError?: boolean; result?: { content?: { type: string; text?: string }[]; details?: Record<string, unknown> }; [key: string]: unknown }
@@ -56,7 +57,7 @@ async function runPi(label: string, calls: Call[]): Promise<PiEvent[]> {
     "--extension", resolve("tests/support/installed-model.ts"),
     "--provider", "orbital-fixture", "--model", "probe", "--tools", "orbital,bash,read,write,edit,grep,find,ls",
     "--mode", "json", "--session", session, "--print", "Run the fixed fixture."];
-  const child = spawn(resolve("node_modules/.bin/pi"), args, { cwd: directory, env: { ...process.env,
+  const child = spawn(resolve("node_modules/.bin/pi"), args, { cwd: directory, env: { ...hostEnvironment,
     PI_CODING_AGENT_DIR: resolve(directory, "agent"), XDG_CONFIG_HOME: configHome,
     ORBITAL_AUTO_ON: "false", ORBITAL_FORWARD_ENV: "E2B_API_KEY", ORBITAL_PI_CALLS: JSON.stringify(calls),
     ORBITAL_IMAGE: image, ORBITAL_LEASE_WINDOW_MS: "30000", ORBITAL_SECRET_SENTINEL: "HOST_SECRET_MUST_NOT_LEAVE" }, stdio: ["ignore", "pipe", "pipe"] });
@@ -82,7 +83,7 @@ async function runPi(label: string, calls: Call[]): Promise<PiEvent[]> {
 try {
   assert.ok(["basic", "restart", "restore", "workspace", "artifacts", "http", "all"].includes(selectedCase!), "Unknown hosted case.");
   const install = spawnSync(resolve("node_modules/.bin/pi"), ["install", resolve("packages/pi-orbital")], {
-    cwd: directory, env: { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
+    cwd: directory, env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
       XDG_CONFIG_HOME: configHome, ORBITAL_AUTO_ON: "false" },
     encoding: "utf8", timeout: 30_000, stdio: ["ignore", "pipe", "pipe"],
   });

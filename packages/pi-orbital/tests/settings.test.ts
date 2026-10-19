@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { basename, delimiter, resolve } from "node:path";
 import test from "node:test";
+import { hostEnvironment } from "../../../tests/support/pi-environment.js";
 
 function fixture() {
   const directory = mkdtempSync(resolve(tmpdir(), "orbital-settings-pi-"));
@@ -14,7 +15,7 @@ function fixture() {
       "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
       "--extension", resolve("packages/pi-orbital/src/index.ts"), "--mode", "json", "--no-session", "--print", message], {
       cwd: directory, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(directory, "agent"),
         XDG_CONFIG_HOME: resolve(directory, "config"), E2B_API_KEY: "", ORBITAL_IMAGE: undefined,
         ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
         ORBITAL_FORWARD_ENV: undefined, ...overrides },
@@ -32,7 +33,7 @@ function fixture() {
       "--extension", resolve("packages/pi-orbital/src/index.ts"), "--extension", resolve("tests/support/installed-model.ts"),
       "--provider", "orbital-fixture", "--model", "probe", "--mode", "json", "--no-session", "--print", "run fixture"], {
       cwd: directory, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false", ORBITAL_IMAGE: undefined,
+      env: { ...hostEnvironment, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false", ORBITAL_IMAGE: undefined,
         ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_SKILL_ROOTS: undefined, ORBITAL_FORWARD_ENV: undefined,
         XDG_CONFIG_HOME: resolve(directory, "config"), PI_CODING_AGENT_DIR: resolve(directory, "agent"),
         ORBITAL_PI_CALLS: JSON.stringify(calls), ...overrides },
@@ -307,7 +308,7 @@ test("a real Pi tool reads skills from the saved Pi preferences", () => {
       "--extension", resolve("packages/pi-orbital/src/index.ts"), "--extension", resolve("tests/support/installed-model.ts"),
       "--provider", "orbital-fixture", "--model", "probe", "--mode", "json", "--no-session", "--print", "run fixture"], {
       cwd: f.directory, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false", ORBITAL_SKILL_ROOTS: undefined,
+      env: { ...hostEnvironment, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false", ORBITAL_SKILL_ROOTS: undefined,
         XDG_CONFIG_HOME: resolve(f.directory, "config"), PI_CODING_AGENT_DIR: resolve(f.directory, "agent"),
         ORBITAL_PI_CALLS: JSON.stringify([{ name: "orbital_skill", arguments: { action: "read", name: "orbital-settings-proof" } }]) },
     });
@@ -336,7 +337,7 @@ test("Pi refresh reads external settings changes without starting a model turn",
   const child = spawn(resolve("node_modules/.bin/pi"), ["--offline", "--no-extensions", "--no-skills",
     "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
     "--extension", resolve("packages/pi-orbital/src/index.ts"), "--mode", "rpc", "--no-session"], {
-    cwd: f.directory, env: { ...process.env, E2B_API_KEY: "", ORBITAL_IMAGE: undefined,
+    cwd: f.directory, env: { ...hostEnvironment, E2B_API_KEY: "", ORBITAL_IMAGE: undefined,
       ORBITAL_LEASE_WINDOW_MS: undefined, ORBITAL_AUTO_ON: undefined, ORBITAL_SKILL_ROOTS: undefined,
       XDG_CONFIG_HOME: resolve(f.directory, "config"), PI_CODING_AGENT_DIR: resolve(f.directory, "agent") },
   });
@@ -402,7 +403,7 @@ test("Pi print mode shows settings on its diagnostic stream without a TUI or a m
       "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
       "--extension", resolve("packages/pi-orbital/src/index.ts"), "--no-session", "--print", "/orb settings"], {
       cwd: f.directory, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, E2B_API_KEY: "", PI_CODING_AGENT_DIR: resolve(f.directory, "agent"),
+      env: { ...hostEnvironment, E2B_API_KEY: "", PI_CODING_AGENT_DIR: resolve(f.directory, "agent"),
         XDG_CONFIG_HOME: resolve(f.directory, "config") },
     });
     assert.equal(run.status, 0, run.stderr);
@@ -432,7 +433,7 @@ test("Pi print mode shows the route without a TUI", () => {
       "--no-prompt-templates", "--no-themes", "--no-context-files", "--no-approve",
       "--extension", resolve("packages/pi-orbital/src/index.ts"), "--no-session", "--print", "/orb status"], {
       cwd: f.directory, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false",
+      env: { ...hostEnvironment, E2B_API_KEY: "", ORBITAL_AUTO_ON: "false",
         PI_CODING_AGENT_DIR: resolve(f.directory, "agent"), XDG_CONFIG_HOME: resolve(f.directory, "config") },
     });
     assert.equal(run.status, 0, run.stderr);

@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
+import { hostEnvironment } from "../../../tests/support/pi-environment.js";
 
 const pi = resolve("node_modules/.bin/pi");
 const extension = resolve("packages/pi-orbital/tests/fixture-extension.ts");
@@ -15,7 +16,7 @@ test("real Pi PTY keeps a remote orb across a follow-up user turn", async () => 
   const remoteMarker = resolve(directory, "orb", "marker");
   const session = resolve(directory, "session.jsonl");
   writeFileSync(hostMarker, "HOST_ONLY");
-  const environment: NodeJS.ProcessEnv = { ...process.env,
+  const environment: NodeJS.ProcessEnv = { ...hostEnvironment,
     TERM: "xterm-256color",
     PI_CODING_AGENT_DIR: resolve(directory, "agent"),
     ORBITAL_PI_FIXTURE_ROOT: directory,

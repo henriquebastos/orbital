@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
+import { hostEnvironment } from "../../../tests/support/pi-environment.js";
 
 const pi = resolve("node_modules/.bin/pi");
 const extension = resolve("packages/pi-orbital/tests/fixture-extension.ts");
@@ -18,7 +19,7 @@ test("a new Pi session runs workspace tools locally by default", () => {
       "--extension", extension, "--provider", "orbital-fixture", "--model", "probe",
       "--tools", "bash", "--mode", "json", "--no-session", "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: dir,
         ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([{ name: "bash", arguments: { command: `printf changed > '${sentinel}'` } }]) },
     });
@@ -41,7 +42,7 @@ test("real Pi creates an orb, attaches, and runs a command in its workspace", ()
       "--tools", "orbital,bash", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach", orbCwd: "/home/user" } },
           { name: "bash", arguments: { command: "printf REMOTE_ONLY > marker" } },
@@ -75,7 +76,7 @@ test("real Pi writes and reads remote files without changing the host file", () 
       "--tools", "orbital,write,read", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "write", arguments: { path: "note.txt", content: "REMOTE_NOTE" } },
@@ -105,7 +106,7 @@ test("real Pi edits remote text and reports an exact-match failure", () => {
       "--tools", "orbital,write,edit,read", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "write", arguments: { path: "note.txt", content: "alpha\n" } },
@@ -137,7 +138,7 @@ test("real Pi searches and lists the orb instead of the host", () => {
       "--tools", "orbital,write,grep,find,ls", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "write", arguments: { path: "remote.txt", content: "BEFORE\nREMOTE_TOKEN\nAFTER\n" } },
@@ -172,7 +173,7 @@ test("a new Pi user shell executes locally by default", async () => {
       "--extension", extension, "--provider", "orbital-fixture", "--model", "probe",
       "--mode", "rpc", "--no-session"], {
       cwd: dir,
-      env: { ...process.env, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir },
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: dir, ORBITAL_PI_FIXTURE_ROOT: dir },
     });
     let stderr = "";
     run.stderr.setEncoding("utf8").on("data", chunk => { stderr += chunk; });
@@ -213,7 +214,7 @@ test("a new Pi process restores the selected orb directory for user shell", asyn
       "--tools", "orbital,bash", "--mode", "json", "--session", session,
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "bash", arguments: { command: "mkdir project" } },
@@ -236,7 +237,7 @@ test("a new Pi process restores the selected orb directory for user shell", asyn
       "--extension", extension, "--provider", "orbital-fixture", "--model", "probe",
       "--mode", "rpc", "--session", session], {
       cwd: dir,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_TRACE: resolve(dir, "trace.jsonl") },
     });
     second.stdin.write(`${JSON.stringify({ id: "shell", type: "bash", command: "pwd; cat marker" })}\n`);
@@ -284,7 +285,7 @@ test("Pi reads a named host skill and copies only its allowed asset into the orb
       "--tools", "orbital,orbital_skill,read", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_SKILL_ROOTS: resolve(dir, "skills"),
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
@@ -322,7 +323,7 @@ test("Pi requires an explicit create after deletion and replaces the public URL"
       "--tools", "orbital,bash", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "orbital", arguments: { action: "url", port: 3000 } },
@@ -359,7 +360,7 @@ test("Pi reports uncertain command and write outcomes with remote evidence", () 
         "--tools", `orbital,${call.name}`, "--mode", "json", "--session", resolve(dir, "session.jsonl"),
         "--print", "run fixture"], {
         cwd: dir, encoding: "utf8", timeout: 30_000,
-        env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+        env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
           ORBITAL_PI_FAULT: fault, ORBITAL_PI_CALLS: JSON.stringify([
             { name: "orbital", arguments: { action: "create_and_attach" } }, call,
           ]) },
@@ -391,7 +392,7 @@ test("Pi returns remote PNG bytes as image content", () => {
       "--tools", "orbital,bash,read", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "bash", arguments: { command } },
@@ -420,7 +421,7 @@ test("Pi parses complete remote grep output beyond the provider preview", () => 
       "--tools", "orbital,bash,grep", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "bash", arguments: { command: "python3 -c 'print(\"MATCH\" + \"x\" * 70000)' > huge.txt" } },
@@ -447,7 +448,7 @@ test("Pi accepts background Bash and bounds ordinary output", () => {
       "--tools", "orbital,bash", "--mode", "json", "--session", resolve(dir, "session.jsonl"),
       "--print", "run fixture"], {
       cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([
           { name: "orbital", arguments: { action: "create_and_attach" } },
           { name: "bash", arguments: { command: "printf BG > launched.txt", mode: "background" } },
@@ -483,7 +484,7 @@ test("Pi rejects a corrupt saved binding before any host or orb command", () => 
       "--provider", "orbital-fixture", "--model", "probe", "--tools", "orbital,bash",
       "--mode", "json", "--session", session, "--print", "run fixture"];
     const initial = spawnSync(pi, args, { cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([{ name: "orbital", arguments: { action: "create_and_attach" } }]) } });
     assert.equal(initial.status, 0, initial.stderr);
     const lines = readFileSync(session, "utf8").trimEnd().split("\n").map(line => {
@@ -494,7 +495,7 @@ test("Pi rejects a corrupt saved binding before any host or orb command", () => 
     writeFileSync(session, `${lines.join("\n")}\n`);
     const command = `printf CHANGED > '${sentinel}'`;
     const resumed = spawnSync(pi, args, { cwd: dir, encoding: "utf8", timeout: 30_000,
-      env: { ...process.env, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
+      env: { ...hostEnvironment, PI_CODING_AGENT_DIR: resolve(dir, "agent"), ORBITAL_PI_FIXTURE_ROOT: dir,
         ORBITAL_PI_CALLS: JSON.stringify([{ name: "bash", arguments: { command } }]) } });
     assert.equal(resumed.status, 0, resumed.stderr);
     const results = resumed.stdout.split("\n").filter(Boolean).map(line => JSON.parse(line) as {
