@@ -104,6 +104,28 @@ test("create reports an allocation the index never lists and still returns it", 
   assert.deepEqual(phases, ["creating", "created", "created_unlisted"]);
 });
 
+test("delete returns only after the Orb ID no longer lists the killed sandbox", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const listed = { sandboxId: "sandbox-1", metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "orbital-image:v1",
+    orbital_v2_lease_window_ms: "60000", orbital_v2_creation_intent: JSON.stringify({ image: "orbital-image:v1" }) },
+    state: "running", cpuCount: 2, memoryMB: 1024 };
+  let lists = 0;
+  // The index still shows the sandbox twice after the kill, then a successor with the same Orb ID, which is not it.
+  const pages = [[listed], [listed], [{ ...listed, sandboxId: "sandbox-2" }]];
+  t.mock.method(Sandbox, "list", () => listPage(pages[Math.min(lists++, pages.length - 1)]!));
+  t.mock.method(Sandbox, "kill", async () => true);
+  const provider = createE2BProvider({ apiKey: "provider-key" });
+  let settled = false;
+  const pending = provider.delete(orb).finally(() => { settled = true; });
+  for (let round = 0; round < 2; round++) {
+    await new Promise<void>(done => setImmediate(done));
+    assert.equal(settled, false);
+    t.mock.timers.tick(250);
+  }
+  await pending;
+  assert.equal(lists, 3);
+});
+
 test("runner renewal diagnostics reach callers without arbitrary guest fields", async (t) => {
   const lastSuccessAt = "2026-09-29T03:00:29.000Z";
   const expected = { category: "timeout", durationMs: 5004, attempt: 8, lastSuccessAt, httpStatus: 504 };

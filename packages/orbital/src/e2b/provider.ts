@@ -274,22 +274,23 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
           cause: cause instanceof Error ? cause.name : "unknown" });
     }
     observer?.onProgress?.({ phase: "created", orbId: request.orbId });
-    await awaitListing(created, observer);
+    await awaitListing(created, "present", observer);
     return created;
   }
 
-  // E2B lists a new sandbox a moment after creation, sometimes seconds later for a snapshot image.
-  // Callers resolve by Orb ID next, so creation returns once the index shows this exact allocation.
-  // A failed listing is a miss. A duplicate Orb ID propagates. After the bound the allocation is returned anyway.
-  async function awaitListing(created: OrbSnapshot, observer?: Observer): Promise<void> {
+  // The E2B list index follows creation and deletion by a moment, sometimes by seconds for a snapshot image.
+  // Callers resolve by Orb ID next, so creation returns once the index shows this exact sandbox and deletion
+  // once it no longer does. A failed listing is a miss. A duplicate Orb ID propagates. After the bound the
+  // call returns anyway; creation then reports created_unlisted.
+  async function awaitListing(target: OrbSnapshot, expected: "present" | "absent", observer?: Observer): Promise<void> {
     for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt++) {
       let found: OrbSnapshot | undefined;
-      try { found = await resolve(created.orbId); }
+      try { found = await resolve(target.orbId); }
       catch (cause) { if (!(cause instanceof OrbitalError && cause.code === "lookup_failed")) throw cause; }
-      if (found?.resourceId === created.resourceId) return;
+      if ((found?.resourceId === target.resourceId) === (expected === "present")) return;
       await delay(LISTING_INTERVAL_MS);
     }
-    observer?.onProgress?.({ phase: "created_unlisted", orbId: created.orbId });
+    if (expected === "present") observer?.onProgress?.({ phase: "created_unlisted", orbId: target.orbId });
   }
 
   async function resume(orb: OrbSnapshot): Promise<void> {
@@ -307,6 +308,7 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
       throw error("uncertain", "delete_unknown", "The E2B deletion outcome is unknown.",
         { resourceId: orb.resourceId, cause: cause instanceof Error ? cause.name : "unknown" });
     }
+    await awaitListing(orb, "absent");
   }
 
   function url(orb: OrbSnapshot, port: number): string {
