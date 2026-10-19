@@ -50,7 +50,7 @@ Creation follows this order:
 - On a miss, prepare a temporary seed, check the runtime, capture the image, and publish its receipt.
 - Resolve the Orb ID again. An Orb that a concurrent creation allocated meanwhile is attached and the prepared image is unused.
 - Allocate the live Orb with its own identity, lease window, and renewal credential. The provider only allocates. It does not look up, compare, or resume.
-- Return once E2B lists the new Orb by its ID, which can take a few seconds after creation. After ten seconds the Orb is returned anyway with a `created_unlisted` progress event. Deletion waits the same way until the Orb ID no longer lists the sandbox.
+- Return once three consecutive E2B listings show the new Orb by its ID. The index can lag by seconds and flap after a change. After ten seconds the Orb is returned anyway with a `created_unlisted` progress event. Deletion waits the same way until the Orb ID no longer lists the sandbox.
 - Return the Orb. The caller can now clone repositories and install project dependencies.
 
 Preparation returns `{ reference, baseReference, cacheKey, reused }`.

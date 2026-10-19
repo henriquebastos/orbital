@@ -63,22 +63,22 @@ test("create returns only after the allocation is resolvable by Orb ID", async (
     orbital_v2_creation_intent: JSON.stringify({ image: "base" }) };
   const listed = { sandboxId: "sandbox-1", metadata, state: "running", cpuCount: 2, memoryMB: 1024 };
   let lists = 0;
-  // A racing creator's sandbox is not this allocation. Then the index lags, then it shows the new sandbox.
-  const pages = [[{ ...listed, sandboxId: "sandbox-other" }], [], [listed]];
+  // A racing creator's sandbox is not this allocation. Then the index lags, shows the new sandbox once, flaps, and settles.
+  const pages = [[{ ...listed, sandboxId: "sandbox-other" }], [], [listed], [], [listed], [listed], [listed]];
   t.mock.method(Sandbox, "list", () => listPage(pages[Math.min(lists++, pages.length - 1)]!));
   t.mock.method(Sandbox, "create", async () => ({ async getInfo() { return { ...listed }; } }));
   const provider = createE2BProvider({ apiKey: "provider-key" });
   let settled = false;
   const pending = provider.create({ orbId: "env-orb", image: "base", leaseWindowMs: 60000, creationIntent: { image: "base" },
     env: { E2B_API_KEY: "k" } }).finally(() => { settled = true; });
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < 6; round++) {
     await new Promise<void>(done => setImmediate(done));
     assert.equal(settled, false);
     t.mock.timers.tick(250);
   }
   const created = await pending;
   assert.equal(created.resourceId, "sandbox-1");
-  assert.equal(lists, 3);
+  assert.equal(lists, 7);
 });
 
 test("create reports an allocation the index never lists and still returns it", async (t) => {
@@ -110,20 +110,20 @@ test("delete returns only after the Orb ID no longer lists the killed sandbox", 
     orbital_v2_lease_window_ms: "60000", orbital_v2_creation_intent: JSON.stringify({ image: "orbital-image:v1" }) },
     state: "running", cpuCount: 2, memoryMB: 1024 };
   let lists = 0;
-  // The index still shows the sandbox twice after the kill, then a successor with the same Orb ID, which is not it.
-  const pages = [[listed], [listed], [{ ...listed, sandboxId: "sandbox-2" }]];
+  // The index still shows the sandbox after the kill, flaps once, then shows a successor with the same Orb ID, which is not it.
+  const pages = [[listed], [], [listed], [{ ...listed, sandboxId: "sandbox-2" }], [], []];
   t.mock.method(Sandbox, "list", () => listPage(pages[Math.min(lists++, pages.length - 1)]!));
   t.mock.method(Sandbox, "kill", async () => true);
   const provider = createE2BProvider({ apiKey: "provider-key" });
   let settled = false;
   const pending = provider.delete(orb).finally(() => { settled = true; });
-  for (let round = 0; round < 2; round++) {
+  for (let round = 0; round < 5; round++) {
     await new Promise<void>(done => setImmediate(done));
     assert.equal(settled, false);
     t.mock.timers.tick(250);
   }
   await pending;
-  assert.equal(lists, 3);
+  assert.equal(lists, 6);
 });
 
 test("runner renewal diagnostics reach callers without arbitrary guest fields", async (t) => {
@@ -403,7 +403,7 @@ test("provider create allocates without a lookup and saves the creation intent",
     assert.equal(created.resourceId, "sandbox-new");
     assert.deepEqual(created.creationIntent, creationIntent);
     assert.deepEqual(paths.slice(0, 2), ["POST /v2/sandboxes", "GET /sandboxes/sandbox-new"]);
-    assert.equal(paths.filter(path => path.startsWith("GET /v2/sandboxes")).length, 1);
+    assert.ok(paths.slice(2).length > 0 && paths.slice(2).every(path => path.startsWith("GET /v2/sandboxes")));
     assert.equal(bodies.length, 1);
     assert.equal((JSON.parse(bodies[0]!) as { metadata: Record<string, string> }).metadata.orbital_v2_creation_intent,
       JSON.stringify(creationIntent));

@@ -24,9 +24,10 @@ const CREATION_INTENT = "orbital_v2_creation_intent";
 const JOB_ROOT = "/home/user/.orbital/jobs";
 const RUNNER = "/usr/local/bin/orbital-runner";
 const START_WAIT_MS = 20_000;
-// Ten seconds covers the longest observed listing lag by about four times.
+// Ten seconds covers the longest observed listing lag by about four times. Three reads in a row outlast the flapping seen after a kill.
 const LISTING_INTERVAL_MS = 250;
 const LISTING_ATTEMPTS = 40;
+const LISTING_CONFIRMATIONS = 3;
 const OUTPUT_PREVIEW_BYTES = 64 * 1024;
 
 export interface E2BProviderConfig {
@@ -278,16 +279,19 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
     return created;
   }
 
-  // The E2B list index follows creation and deletion by a moment, sometimes by seconds for a snapshot image.
-  // Callers resolve by Orb ID next, so creation returns once the index shows this exact sandbox and deletion
-  // once it no longer does. A failed listing is a miss. A duplicate Orb ID propagates. After the bound the
-  // call returns anyway; creation then reports created_unlisted.
+  // The E2B list index follows creation and deletion by a moment, sometimes by seconds for a snapshot image,
+  // and single reads flap for a short time after a change. Callers resolve by Orb ID next, so creation returns
+  // once consecutive reads show this exact sandbox and deletion once consecutive reads no longer do. A failed
+  // listing is a miss. A duplicate Orb ID propagates. After the bound the call returns anyway; creation then
+  // reports created_unlisted.
   async function awaitListing(target: OrbSnapshot, expected: "present" | "absent", observer?: Observer): Promise<void> {
+    let consistent = 0;
     for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt++) {
       let found: OrbSnapshot | undefined;
       try { found = await resolve(target.orbId); }
       catch (cause) { if (!(cause instanceof OrbitalError && cause.code === "lookup_failed")) throw cause; }
-      if ((found?.resourceId === target.resourceId) === (expected === "present")) return;
+      consistent = (found?.resourceId === target.resourceId) === (expected === "present") ? consistent + 1 : 0;
+      if (consistent === LISTING_CONFIRMATIONS) return;
       await delay(LISTING_INTERVAL_MS);
     }
     if (expected === "present") observer?.onProgress?.({ phase: "created_unlisted", orbId: target.orbId });
