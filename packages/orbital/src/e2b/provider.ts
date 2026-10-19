@@ -24,6 +24,9 @@ const CREATION_INTENT = "orbital_v2_creation_intent";
 const JOB_ROOT = "/home/user/.orbital/jobs";
 const RUNNER = "/usr/local/bin/orbital-runner";
 const START_WAIT_MS = 20_000;
+// Ten seconds covers the longest observed listing lag by about four times.
+const LISTING_INTERVAL_MS = 250;
+const LISTING_ATTEMPTS = 40;
 const OUTPUT_PREVIEW_BYTES = 64 * 1024;
 
 export interface E2BProviderConfig {
@@ -262,15 +265,31 @@ export function createE2BProvider(config: E2BProviderConfig): Provider {
       throw error("uncertain", "create_unknown", "The E2B creation outcome is unknown. Resolve this Orb ID before retrying.",
         { orbId: request.orbId, cause: cause instanceof Error ? cause.name : "unknown" });
     }
+    let created: OrbSnapshot;
     try {
-      const info = await sandbox.getInfo();
-      observer?.onProgress?.({ phase: "created", orbId: request.orbId });
-      return snapshot(info);
+      created = snapshot(await sandbox.getInfo());
     } catch (cause) {
       throw error("uncertain", "created_uninspected", "The E2B sandbox was created but inspection failed.",
         { orbId: request.orbId, resourceId: sandbox.sandboxId,
           cause: cause instanceof Error ? cause.name : "unknown" });
     }
+    observer?.onProgress?.({ phase: "created", orbId: request.orbId });
+    await awaitListing(created, observer);
+    return created;
+  }
+
+  // E2B lists a new sandbox a moment after creation, sometimes seconds later for a snapshot image.
+  // Callers resolve by Orb ID next, so creation returns once the index shows this exact allocation.
+  // A failed listing is a miss. A duplicate Orb ID propagates. After the bound the allocation is returned anyway.
+  async function awaitListing(created: OrbSnapshot, observer?: Observer): Promise<void> {
+    for (let attempt = 0; attempt < LISTING_ATTEMPTS; attempt++) {
+      let found: OrbSnapshot | undefined;
+      try { found = await resolve(created.orbId); }
+      catch (cause) { if (!(cause instanceof OrbitalError && cause.code === "lookup_failed")) throw cause; }
+      if (found?.resourceId === created.resourceId) return;
+      await delay(LISTING_INTERVAL_MS);
+    }
+    observer?.onProgress?.({ phase: "created_unlisted", orbId: created.orbId });
   }
 
   async function resume(orb: OrbSnapshot): Promise<void> {

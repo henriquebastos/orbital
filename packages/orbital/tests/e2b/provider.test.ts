@@ -18,9 +18,18 @@ const orb: OrbSnapshot = {
   creationIntent: { image: "orbital-image:v1" },
 };
 
+// One list page whose paginator ends after the first read.
+function listPage(items: unknown[]) {
+  const paginator = { hasNext: true, async nextItems() { paginator.hasNext = false; return items; } };
+  return paginator;
+}
+
 test("creation sends the complete instance environment to E2B without metadata secrets", async (t) => {
-  t.mock.method(Sandbox, "list", () => { throw new Error("Allocation must not look up existing sandboxes"); });
   const calls: Array<{ envs: Record<string, string>; metadata: Record<string, string> }> = [];
+  t.mock.method(Sandbox, "list", () => {
+    if (calls.length === 0) throw new Error("Allocation must not look up existing sandboxes before creating");
+    return listPage([{ sandboxId: "sandbox-1", metadata: calls.at(-1)!.metadata, state: "running", cpuCount: 8, memoryMB: 8192 }]);
+  });
   t.mock.method(Sandbox, "create", async (_image: string, options: typeof calls[number]) => {
     calls.push(options);
     return { async getInfo() { return { sandboxId: "sandbox-1", metadata: options.metadata, state: "running", cpuCount: 8, memoryMB: 8192 };  } };
@@ -46,6 +55,53 @@ test("creation requires an explicitly supplied renewal key before any E2B reques
     await assert.rejects(provider.create({ orbId: "env-orb", image: "base", leaseWindowMs: 60000, creationIntent: { image: "base" }, env }),
       { outcome: "not_started", code: "missing_renewal_key" });
   }
+});
+
+test("create returns only after the allocation is resolvable by Orb ID", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const metadata = { orbital_v2_orb_id: "env-orb", orbital_v2_image: "base", orbital_v2_lease_window_ms: "60000",
+    orbital_v2_creation_intent: JSON.stringify({ image: "base" }) };
+  const listed = { sandboxId: "sandbox-1", metadata, state: "running", cpuCount: 2, memoryMB: 1024 };
+  let lists = 0;
+  // A racing creator's sandbox is not this allocation. Then the index lags, then it shows the new sandbox.
+  const pages = [[{ ...listed, sandboxId: "sandbox-other" }], [], [listed]];
+  t.mock.method(Sandbox, "list", () => listPage(pages[Math.min(lists++, pages.length - 1)]!));
+  t.mock.method(Sandbox, "create", async () => ({ async getInfo() { return { ...listed }; } }));
+  const provider = createE2BProvider({ apiKey: "provider-key" });
+  let settled = false;
+  const pending = provider.create({ orbId: "env-orb", image: "base", leaseWindowMs: 60000, creationIntent: { image: "base" },
+    env: { E2B_API_KEY: "k" } }).finally(() => { settled = true; });
+  for (let round = 0; round < 2; round++) {
+    await new Promise<void>(done => setImmediate(done));
+    assert.equal(settled, false);
+    t.mock.timers.tick(250);
+  }
+  const created = await pending;
+  assert.equal(created.resourceId, "sandbox-1");
+  assert.equal(lists, 3);
+});
+
+test("create reports an allocation the index never lists and still returns it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const metadata = { orbital_v2_orb_id: "env-orb", orbital_v2_image: "base", orbital_v2_lease_window_ms: "60000",
+    orbital_v2_creation_intent: JSON.stringify({ image: "base" }) };
+  let lists = 0;
+  t.mock.method(Sandbox, "list", () => { lists += 1; if (lists % 2 === 0) throw new Error("listing failed"); return listPage([]); });
+  t.mock.method(Sandbox, "create", async () => ({ async getInfo() { return { sandboxId: "sandbox-1", metadata, state: "running", cpuCount: 2, memoryMB: 1024 }; } }));
+  const provider = createE2BProvider({ apiKey: "provider-key" });
+  const phases: string[] = [];
+  let settled = false;
+  const pending = provider.create({ orbId: "env-orb", image: "base", leaseWindowMs: 60000, creationIntent: { image: "base" },
+    env: { E2B_API_KEY: "k" } }, { onProgress: event => phases.push(event.phase) }).finally(() => { settled = true; });
+  for (let round = 0; round < 40; round++) {
+    await new Promise<void>(done => setImmediate(done));
+    t.mock.timers.tick(250);
+  }
+  await new Promise<void>(done => setImmediate(done));
+  assert.equal(settled, true);
+  assert.equal((await pending).resourceId, "sandbox-1");
+  assert.equal(lists, 40);
+  assert.deepEqual(phases, ["creating", "created", "created_unlisted"]);
 });
 
 test("runner renewal diagnostics reach callers without arbitrary guest fields", async (t) => {
@@ -286,10 +342,9 @@ test("provider create allocates without a lookup and saves the creation intent",
   const server = createServer((request, response) => {
     paths.push(`${request.method} ${request.url}`);
     if (request.method === "GET" && request.url?.startsWith("/v2/sandboxes")) {
+      const metadata = (JSON.parse(bodies[0] ?? "{}") as { metadata?: Record<string, string> }).metadata;
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify([{ sandboxID: "sandbox-existing", templateID: "other-image",
-        metadata: { orbital_v2_orb_id: "session-1", orbital_v2_image: "other-image",
-          orbital_v2_lease_window_ms: "30000", orbital_v2_creation_intent: JSON.stringify({ image: "other-image" }) },
+      response.end(JSON.stringify(metadata === undefined ? [] : [{ sandboxID: "sandbox-new", templateID: "prepared-image", metadata,
         state: "running", startedAt: "2026-09-24T00:00:00Z", endAt: "2026-09-24T00:01:00Z",
         cpuCount: 2, memoryMB: 1024, envdVersion: "0.6.10" }]));
       return;
@@ -325,7 +380,8 @@ test("provider create allocates without a lookup and saves the creation intent",
       env: { E2B_API_KEY: "test-key" }, creationIntent });
     assert.equal(created.resourceId, "sandbox-new");
     assert.deepEqual(created.creationIntent, creationIntent);
-    assert.deepEqual(paths, ["POST /v2/sandboxes", "GET /sandboxes/sandbox-new"]);
+    assert.deepEqual(paths.slice(0, 2), ["POST /v2/sandboxes", "GET /sandboxes/sandbox-new"]);
+    assert.equal(paths.filter(path => path.startsWith("GET /v2/sandboxes")).length, 1);
     assert.equal(bodies.length, 1);
     assert.equal((JSON.parse(bodies[0]!) as { metadata: Record<string, string> }).metadata.orbital_v2_creation_intent,
       JSON.stringify(creationIntent));
