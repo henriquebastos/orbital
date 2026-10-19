@@ -70,8 +70,8 @@ Lookup, submission, and waiting do not require a cache directory. Preparation se
 | `effects.findReusableBuild(name)` | Read remote state. Return a ready build, otherwise a pending or failed build. Only a missing alias returns `undefined`. |
 | `effects.submitBuild(name, recipe, observer?)` | Submit one build and return its identity without waiting for completion. |
 | `effects.waitForBuild(artifact, observer?)` | Poll that exact build. Never submit or delete an image. |
-| `effects.external(reference)` | Resolve an explicit reference to an exact ready build. |
-| `effects.available(artifact)` | Check the recorded artifact without building. |
+| `effects.external(reference)` | Resolve `name[:tag]` to one ready build through the alias API, the tag list, and the template build list. A raw template ID is accepted only with a build ID tag. |
+| `effects.available(artifact)` | Page the raw template's build list for the pinned build. Absent is `false`. A build that is not ready is an `image_not_ready` error. No build is submitted. |
 | `effects.createSeed(base, attemptId)` | Create a preparation seed with separate write, execute, check, capture, and delete operations. |
 
 `createImages(effects, records)` composes these operations with durable local receipts.
@@ -82,6 +82,9 @@ The default composition checks its local receipt, then looks up the content-addr
 It reuses a ready build, waits for a pending build, or submits after confirmed absence or a terminal failed build.
 Lookup errors stop the flow. They never count as absence.
 Each allocation uses an exact build reference, not a mutable tag.
+
+An artifact is `{ name, templateId, buildId }`. `name` is the string E2B accepted at creation: the owned base alias, the canonical `<team>/<name>` of a captured snapshot, or the user's reference name.
+`templateId` is the raw E2B template ID, resolved once. `artifactReference(artifact)` renders the allocation reference `name:buildId`.
 
 ## 1b Explicit checkout
 
@@ -171,7 +174,7 @@ Default-image creation and `prepare()` require the Images adapter.
 | `lifecycle/creation.ts` | Validate image inputs and compare creation intent. |
 | `lifecycle/index.ts` | Own Orb reuse. Resolve before image work, resolve again after preparation, and allocate only when no Orb exists. |
 | `lifecycle/images/preparation.ts` | Order cache lookup, preparation, publication, and cleanup. |
-| `e2b/image-registry.ts` | Resolve one reference, which may name a captured snapshot, a template alias, a tag, or a build, to one pinned build. |
+| `e2b/image-registry.ts` | Resolve one `name[:tag]` reference to one pinned build through the alias and template APIs, and confirm a pinned build through the raw template's build list. |
 | `e2b/images.ts` | Build bases, execute preparation seeds, and capture images. |
 | `lifecycle/images/records.ts` | Store attempt and ready receipts atomically. |
 | `e2b/recipe.ts` | Define the owned base from the bundled Pod files. |
@@ -188,7 +191,8 @@ A known script failure publishes no image. A failed refresh preserves the previo
 If final Orb allocation fails, the prepared image remains available.
 
 The cache keeps ready records, the current attempt per cache key, the latest state of each attempt by ID, and script logs. Raw provider credentials are not stored in those records.
-A ready record from another preparation contract version is not reused. The preparation key covers the base build, the script, and the contract version. Resources belong to the base.
+The preparation contract version is 3. Every record key includes it, so records from earlier contracts are unreachable rather than rejected after a read.
+The base key covers the recipe hash, the resources, and the version. The preparation key covers the base template and build, the script hash, and the version.
 Cache scope includes a fingerprint of the credential and the provider endpoint. Credential rotation starts a separate local cache scope.
 Remote base discovery permits reuse across installations and credentials with access to the same E2B image.
 Prepared-script images still use the local cache and are not discovered across hosts.

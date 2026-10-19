@@ -1,17 +1,15 @@
-import { BuildError, SandboxError, Sandbox, Template } from "e2b";
+import { BuildError, SandboxError, Template } from "e2b";
 
 import { OrbitalError } from "../operations.js";
 import type { ImageBuild } from "../lifecycle/images/preparation.js";
-import type { ImageArtifact } from "../lifecycle/images/records.js";
+import { artifactReference, type ImageArtifact } from "../lifecycle/images/records.js";
 import type { E2BProviderConfig } from "./provider.js";
 
-// E2B image identity. One reference "name[:tag]" can name three different things:
-// - a captured snapshot: a sandbox snapshot listed under "name:default", whose canonical
-//   snapshot ID is the template name and whose tags map to build IDs;
-// - a template alias: a human name that the alias API maps to a template ID;
-// - a build: one build ID of a template, with a status (waiting, building, ready, error).
-// An artifact pins one build. Its reference is always "name:buildId" so a later lookup
-// cannot drift to another build behind the same tag.
+// E2B image identity. A reference "name[:tag]" names a template through its alias (an owned base
+// name, a captured snapshot's canonical "<team>/<name>", or any user alias), or through its raw
+// template ID when the tag is a build ID. A tag maps to one build of that template. An artifact pins
+// one build and keeps the accepted name, so every later lookup pages the raw template's build list.
+// Builds are confirmed only through that list: E2B rejects /builds/{id}/status for snapshot builds.
 
 const BUILD_ID = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i;
 const PAGE_LIMIT = 100;
@@ -64,8 +62,6 @@ type TemplatePage = { data: unknown; nextToken?: string };
 export function createImageRegistry(config: E2BProviderConfig) {
   const options = sdkOptions(config);
 
-  // 1. Template API: alias and build listing.
-
   async function apiGet(path: string): Promise<TemplatePage | undefined> {
     let response: Response;
     try {
@@ -112,101 +108,62 @@ export function createImageRegistry(config: E2BProviderConfig) {
     throw lookupFailed("The E2B image build list exceeded the page limit.");
   }
 
-  // One build of a template or alias, with its status. Undefined when absent.
-  async function templateBuild(name: string, buildId: string): Promise<{ templateId: string; status: string } | undefined> {
-    let templateId = name;
-    let pages = buildPages(templateId);
-    let first = await pages.next();
-    if (first.value === undefined) {
-      const aliased = await aliasTemplateId(name);
-      if (!aliased) return undefined;
-      templateId = aliased;
-      pages = buildPages(templateId);
-      first = await pages.next();
-      if (first.value === undefined) return undefined;
-    }
-    for (let page = first; !page.done; page = await pages.next()) {
-      if (page.value === undefined) return undefined;
-      const build = page.value.find((item) => item.buildID === buildId);
+  // The status of one build of a raw template. Undefined when the template or the build is absent.
+  async function buildStatus(templateId: string, buildId: string): Promise<string | undefined> {
+    for await (const builds of buildPages(templateId)) {
+      if (builds === undefined) return undefined;
+      const build = builds.find((item) => item.buildID === buildId);
       if (build) {
         if (typeof build.status !== "string") throw lookupFailed("The E2B image build has invalid status.");
-        return { templateId, status: build.status };
+        return build.status;
       }
     }
     return undefined;
   }
 
-  // 2. Snapshots.
-
-  // The canonical snapshot ID for a snapshot name, or undefined when no snapshot has that name.
-  async function snapshotId(name: string): Promise<string | undefined> {
-    try {
-      const paginator = Sandbox.listSnapshots({ ...options, name, limit: 20 });
-      while (paginator.hasNext) {
-        const snapshots = await paginator.nextItems();
-        const match = snapshots.find((snapshot) => snapshot.snapshotId === name ||
-          !name.includes("/") && snapshot.snapshotId.endsWith(`/${name}`));
-        if (match) return match.snapshotId;
-      }
-      return undefined;
-    } catch (cause) {
-      if (missing(cause)) return undefined;
-      throw lookupFailed("The captured image could not be inspected.", lookupEvidence(name, cause));
-    }
-  }
-
-  async function templateTags(name: string, reference: string, subject: "captured image tag" | "requested E2B image") {
+  async function templateTags(name: string, reference: string) {
     try { return await Template.getTags(name, options); }
     catch (cause) {
-      if (missing(cause)) throw imageError("not_started", "image_missing", `The ${subject} does not exist.`, { reference });
-      throw lookupFailed(`The ${subject} could not be inspected.`, lookupEvidence(reference, cause));
+      if (missing(cause)) throw imageError("not_started", "image_missing", "The requested E2B image does not exist.", { reference });
+      throw lookupFailed("The requested E2B image could not be inspected.", lookupEvidence(reference, cause));
     }
   }
 
-  // 3. Resolution.
-
-  // Resolve a reference to one pinned build. Snapshot first, then a build ID tag, then a named tag.
+  // Resolve a reference to one pinned ready build. A raw template ID is accepted only with a build ID tag.
   async function resolve(reference: string): Promise<ImageArtifact> {
     const { name, tag } = referenceParts(reference);
-    const captured = await snapshotId(`${name}:default`);
-    if (captured) {
-      const canonicalName = referenceParts(captured).name;
-      const tags = await templateTags(canonicalName, reference, "captured image tag");
-      const match = isBuildId(tag) ? tags.find((item) => item.buildId === tag) : tags.find((item) => item.tag === tag);
-      if (!match) throw imageError("not_started", "image_unavailable", "The captured image build is not accessible.", { reference });
-      return { reference: `${canonicalName}:${match.buildId}`, templateId: canonicalName, buildId: match.buildId,
-        kind: "snapshot", snapshotId: captured };
+    let templateId = await aliasTemplateId(name);
+    if (templateId === undefined) {
+      if (!isBuildId(tag)) throw imageError("not_started", "image_missing", "The requested E2B image does not exist.", { reference });
+      templateId = name;
     }
-    const buildId = isBuildId(tag) ? tag : (await templateTags(name, reference, "requested E2B image")).find((item) => item.tag === tag)?.buildId;
+    const buildId = isBuildId(tag) ? tag : (await templateTags(name, reference)).find((item) => item.tag === tag)?.buildId;
     if (!buildId) throw imageError("not_started", "image_missing", "The requested E2B image tag does not exist.", { reference });
-    const build = await templateBuild(name, buildId);
-    if (!build) throw imageError("not_started", "image_missing", "The requested E2B image build does not exist.", { reference });
-    if (build.status !== "ready") throw imageError("not_started", "image_unavailable", "The requested E2B image is not ready.",
-      { reference, status: build.status });
-    return { reference: `${name}:${buildId}`, templateId: build.templateId, buildId, kind: "template" };
+    const status = await buildStatus(templateId, buildId);
+    if (status === undefined) throw imageError("not_started", "image_missing", "The requested E2B image build does not exist.", { reference });
+    if (status !== "ready") throw imageError("not_started", "image_unavailable", "The requested E2B image is not ready.", { reference, status });
+    return { name, templateId, buildId };
   }
 
-  // Whether a pinned artifact still exists and is ready. A snapshot must still resolve to the same build.
+  // Whether a pinned artifact still exists and is ready. Absent is false. Another status is an error.
   async function available(artifact: ImageArtifact): Promise<boolean> {
-    if (artifact.kind === "snapshot") {
-      const name = artifact.snapshotId ?? `${referenceParts(artifact.reference).name}:default`;
-      if (!await snapshotId(name)) return false;
-      const current = await resolve(artifact.reference);
-      return current.kind === "snapshot" && current.buildId === artifact.buildId;
+    const status = await buildStatus(artifact.templateId, artifact.buildId);
+    if (status === undefined) return false;
+    if (status !== "ready") {
+      throw imageError("not_started", "image_not_ready", "The exact image build is not ready.",
+        { reference: artifactReference(artifact), status });
     }
-    try {
-      const build = await templateBuild(artifact.templateId, artifact.buildId);
-      if (!build) return false;
-      if (build.status !== "ready") {
-        throw imageError("not_started", "image_not_ready", "The exact image build is not ready.",
-          { reference: artifact.reference, status: build.status });
-      }
-      return true;
-    } catch (cause) {
-      if (missing(cause)) return false;
-      if (cause instanceof OrbitalError) throw cause;
-      throw lookupFailed("The exact image build could not be inspected.", lookupEvidence(artifact.reference, cause));
-    }
+    return true;
+  }
+
+  // The artifact behind a snapshot ID that createSnapshot returned ("<team>/<name>:<tag>").
+  async function captured(snapshotId: string): Promise<ImageArtifact> {
+    const { name, tag } = referenceParts(snapshotId);
+    const templateId = await aliasTemplateId(name);
+    if (templateId === undefined) throw lookupFailed("The captured image has no alias.", { reference: snapshotId });
+    const buildId = (await templateTags(name, snapshotId)).find((item) => item.tag === tag)?.buildId;
+    if (!buildId) throw lookupFailed("The captured image tag has no build.", { reference: snapshotId });
+    return { name, templateId, buildId };
   }
 
   // The most useful build of an alias: a ready build, else a pending one, else a failed one.
@@ -222,8 +179,8 @@ export function createImageRegistry(config: E2BProviderConfig) {
           !["waiting", "building", "ready", "error"].includes(build.status as string)) {
           throw lookupFailed("The E2B image build has invalid data.");
         }
-        const result: ImageBuild = { artifact: { reference: `${name}:${build.buildID}`, templateId,
-          buildId: build.buildID, kind: "template" }, status: build.status as ImageBuild["status"] };
+        const result: ImageBuild = { artifact: { name, templateId, buildId: build.buildID },
+          status: build.status as ImageBuild["status"] };
         if (result.status === "ready") return result;
         if (result.status === "error") failed ??= result;
         else pending ??= result;
@@ -233,5 +190,5 @@ export function createImageRegistry(config: E2BProviderConfig) {
     throw lookupFailed("The E2B image has no visible builds.");
   }
 
-  return { resolve, available, findReusableBuild };
+  return { resolve, available, captured, findReusableBuild };
 }

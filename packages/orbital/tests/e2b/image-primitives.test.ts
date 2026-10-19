@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Template } from "e2b";
 import { createE2BImageEffects } from "../../src/e2b/images.js";
+import { createImageRegistry } from "../../src/e2b/image-registry.js";
 
 test("remote lookup prefers ready builds across pages and distinguishes absence from failure", async () => {
   const buildId = "123e4567-e89b-12d3-a456-426614174000";
@@ -36,8 +37,7 @@ test("remote lookup prefers ready builds across pages and distinguishes absence 
     const effects = createE2BImageEffects({ apiKey: "test-only", cacheDirectory: directory,
       apiUrl: `http://127.0.0.1:${address.port}` });
     const found = await effects.findReusableBuild("orbital-base-hash");
-    assert.deepEqual(found, { status: "ready", artifact: { reference: `orbital-base-hash:${buildId}`,
-      templateId: "raw-id", buildId, kind: "template" } });
+    assert.deepEqual(found, { status: "ready", artifact: { name: "orbital-base-hash", templateId: "raw-id", buildId } });
     mode = "pending";
     assert.equal((await effects.findReusableBuild("orbital-base-hash"))?.status, "building");
     for (mode of ["empty", "gone", "invalid"]) {
@@ -51,6 +51,69 @@ test("remote lookup prefers ready builds across pages and distinguishes absence 
     assert.ok(requests.every(request => request.startsWith("GET ")));
   } finally {
     await rm(directory, { recursive: true, force: true });
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+  }
+});
+
+test("availability pages the raw template build list and requires a ready build", async () => {
+  const buildId = "123e4567-e89b-12d3-a456-426614174000";
+  let mode = "ready";
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    const path = request.url!;
+    requests.push(path);
+    response.setHeader("content-type", "application/json");
+    if (path === "/templates/raw-id?limit=100") {
+      if (mode === "gone") { response.writeHead(404).end("{}"); return; }
+      response.setHeader("X-Next-Token", "page two");
+      response.end(JSON.stringify({ templateID: "raw-id", builds: [{ buildID: "other", status: "ready" }] }));
+    } else if (path.endsWith("nextToken=page%20two")) {
+      response.end(JSON.stringify({ templateID: "raw-id", builds: mode === "absent" ? [] : [{ buildID: buildId, status: mode }] }));
+    } else response.writeHead(500).end("{}");
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const effects = createE2BImageEffects({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}` });
+    const artifact = { name: "orbital-base-hash", templateId: "raw-id", buildId };
+    assert.equal(await effects.available(artifact), true);
+    assert.deepEqual(requests, ["/templates/raw-id?limit=100", "/templates/raw-id?limit=100&nextToken=page%20two"]);
+    mode = "gone";
+    assert.equal(await effects.available(artifact), false);
+    mode = "absent";
+    assert.equal(await effects.available(artifact), false);
+    mode = "building";
+    await assert.rejects(effects.available(artifact), { code: "image_not_ready" });
+    assert.equal(requests.some(path => path.includes("/builds/") || path.includes("/snapshots") || path.includes("/aliases/")), false);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(done => server.close(() => done()));
+  }
+});
+
+test("a captured snapshot becomes an artifact named by its canonical name with the raw template ID", async () => {
+  const buildId = "123e4567-e89b-12d3-a456-426614174000";
+  const requests: string[] = [];
+  const server = createServer((request, response) => {
+    const path = decodeURIComponent(request.url!);
+    requests.push(path);
+    response.setHeader("content-type", "application/json");
+    if (path === "/templates/aliases/team/orbital-v2-prepared-abc") response.end(JSON.stringify({ templateID: "raw-id", public: false }));
+    else if (path === "/templates/team/orbital-v2-prepared-abc/tags") {
+      response.end(JSON.stringify([{ tag: "default", buildID: buildId, createdAt: "2026-09-26T00:00:00Z" }]));
+    } else response.writeHead(500).end("{}");
+  });
+  await new Promise<void>(done => server.listen(0, "127.0.0.1", done));
+  try {
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const registry = createImageRegistry({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}` });
+    const artifact = await registry.captured("team/orbital-v2-prepared-abc:default");
+    assert.deepEqual(artifact, { name: "team/orbital-v2-prepared-abc", templateId: "raw-id", buildId });
+    assert.deepEqual(requests, ["/templates/aliases/team/orbital-v2-prepared-abc", "/templates/team/orbital-v2-prepared-abc/tags"]);
+  } finally {
     server.closeAllConnections();
     await new Promise<void>(done => server.close(() => done()));
   }
@@ -97,7 +160,7 @@ test("submission returns build identity without waiting; waiting never submits",
     const artifact = await effects.submitBuild("orbital-base-hash", {
       sourceHash: "hash", template: Template().fromBaseImage(), cpuCount: 8, memoryMB: 8192, minFreeDiskMb: 20480,
     });
-    assert.equal(artifact.reference, `orbital-base-hash:${buildId}`);
+    assert.deepEqual(artifact, { name: "orbital-base-hash", templateId: "raw-id", buildId });
     assert.equal(bodies[0]?.cpuCount, 8);
     assert.equal(bodies[0]?.memoryMB, 8192);
     assert.equal(bodies[0]?.minFreeDiskMb, 20480);

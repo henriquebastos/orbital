@@ -1,16 +1,18 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { createImages, type ImageEffects, type ImageSeed } from "../../src/lifecycle/images/preparation.js";
+import { baseRecordKey, createImages, PREPARATION_CONTRACT_VERSION, type ImageEffects, type ImageSeed } from "../../src/lifecycle/images/preparation.js";
 import { OrbitalError } from "../../src/operations.js";
-import { createE2BImages, createE2BImageEffects } from "../../src/e2b/images.js";
-import { ImageRecords, type ImageArtifact } from "../../src/lifecycle/images/records.js";
+import { createE2BImages } from "../../src/e2b/images.js";
+import { artifactReference, ImageRecords, type ImageArtifact } from "../../src/lifecycle/images/records.js";
 
-const base: ImageArtifact = { reference: "base:one", templateId: "base", buildId: "one", kind: "template" };
+const base: ImageArtifact = { name: "base", templateId: "base-template", buildId: "one" };
+const baseReference = artifactReference(base);
 
 async function fixture(run: (ctx: { effects: ImageEffects; records: ImageRecords;
   captured: ImageArtifact[]; calls: string[]; directory: string }) => Promise<void>): Promise<void> {
@@ -20,8 +22,8 @@ async function fixture(run: (ctx: { effects: ImageEffects; records: ImageRecords
   let generation = 0;
   const effects: ImageEffects = {
     scope: "test-scope",
-    async available(artifact) { calls.push(`available:${artifact.reference}`); return artifact.reference !== "deleted"; },
-    async external(reference) { calls.push(`external:${reference}`); return { ...base, reference }; },
+    async available(artifact) { calls.push(`available:${artifactReference(artifact)}`); return artifact.name !== "deleted"; },
+    async external(reference) { calls.push(`external:${reference}`); return { ...base, name: reference }; },
     async recipe() { calls.push("recipe"); return { sourceHash: "recipe-one", template: {}, cpuCount: 2, memoryMB: 1024 }; },
     async findReusableBuild(name) { calls.push(`find:${name}`); return undefined; },
     async submitBuild() { calls.push("build"); return base; },
@@ -36,8 +38,8 @@ async function fixture(run: (ctx: { effects: ImageEffects; records: ImageRecords
         async capture() {
           calls.push("capture");
           generation += 1;
-          const artifact: ImageArtifact = { reference: `snapshot-${generation}`, templateId: `snapshot-${generation}`,
-            buildId: `build-${generation}`, kind: "snapshot" };
+          const artifact: ImageArtifact = { name: `snapshot-${generation}`, templateId: `snapshot-template-${generation}`,
+            buildId: `build-${generation}` };
           captured.push(artifact);
           return artifact;
         },
@@ -55,11 +57,13 @@ test("a ready preparation is reused and a deleted artifact is rebuilt", async ()
   const images = createImages(effects, records);
   const first = await images.ensure({ preparation: "echo one" });
   assert.equal(first.reused, false);
+  assert.equal(first.reference, "snapshot-1:build-1");
+  assert.equal(first.baseReference, baseReference);
   const second = await images.ensure({ preparation: "echo one" });
   assert.equal(second.reference, first.reference);
   assert.equal(second.reused, true);
   assert.equal(calls.filter((call) => call === "seed").length, 1);
-  effects.available = async (artifact) => artifact.reference !== first.reference;
+  effects.available = async (artifact) => artifactReference(artifact) !== first.reference;
   const third = await images.ensure({ preparation: "echo one" });
   assert.notEqual(third.reference, first.reference);
   assert.equal(calls.filter((call) => call === "seed").length, 2);
@@ -111,10 +115,7 @@ test("simultaneous remote misses can build twice without overwriting either host
     await bothLookups;
     return undefined;
   };
-  effects.submitBuild = async name => {
-    const buildId = String(++builds);
-    return { ...base, reference: `${name}:${buildId}`, buildId };
-  };
+  effects.submitBuild = async name => ({ name, templateId: base.templateId, buildId: String(++builds) });
   const [first, second] = await Promise.all([
     createImages(effects, records).ensure({}),
     createImages(effects, new ImageRecords(join(directory, "second-host"), effects.scope)).ensure({}),
@@ -183,6 +184,35 @@ test("script bytes and base build identity change the preparation key", async ()
   assert.notEqual(changedBase.cacheKey, first.cacheKey);
 }));
 
+test("the base record key includes the contract version so older records are unreachable", async () => fixture(async ({ effects, records }) => {
+  const recipe = await effects.recipe();
+  const result = await createImages(effects, records).ensure({});
+  assert.equal(PREPARATION_CONTRACT_VERSION, 3);
+  assert.equal(result.cacheKey, baseRecordKey(effects.scope, recipe));
+  assert.deepEqual(await records.keys(), [result.cacheKey]);
+  const versionTwoKey = createHash("sha256")
+    .update(JSON.stringify(["base", effects.scope, recipe.sourceHash, recipe.cpuCount, recipe.memoryMB])).digest("hex");
+  assert.notEqual(result.cacheKey, versionTwoKey);
+  assert.equal((await records.ready(result.cacheKey))?.contractVersion, 3);
+}));
+
+test("ready records require the structured artifact shape", async () => fixture(async ({ effects, records, directory }) => {
+  const result = await createImages(effects, records).ensure({});
+  const record = await records.ready(result.cacheKey);
+  assert.ok(record);
+  assert.deepEqual(record.artifact, base);
+  const path = join(directory, "test-scope", "ready", `${result.cacheKey}.json`);
+  const { name: _name, ...nameless } = base;
+  await writeFile(path, JSON.stringify({ ...record, artifact: nameless }));
+  await assert.rejects(records.ready(result.cacheKey), /invalid artifact/);
+  await writeFile(path, JSON.stringify({ ...record, artifact: { ...base, kind: "template" } }));
+  await assert.rejects(records.ready(result.cacheKey), /invalid artifact/);
+  await writeFile(path, JSON.stringify({ ...record, artifact: { ...base, reference: "base:one" } }));
+  await assert.rejects(records.ready(result.cacheKey), /invalid artifact/);
+  await writeFile(path, JSON.stringify({ ...record, base: nameless }));
+  await assert.rejects(records.ready(result.cacheKey), /invalid artifact/);
+}));
+
 test("failed base refresh leaves its previous ready record", async () => fixture(async ({ effects, records }) => {
   const images = createImages(effects, records);
   const first = await images.ensure({});
@@ -225,7 +255,7 @@ test("malformed attempt state fails closed before another seed", async () => fix
   const first = await images.ensure({ preparation: "echo one" });
   const attempt = await records.attempt(first.cacheKey);
   assert.ok(attempt);
-  effects.available = async (artifact) => artifact.kind === "template";
+  effects.available = async (artifact) => artifact.name === base.name;
   await writeFile(join(directory, "test-scope", "attempt", `${first.cacheKey}.json`),
     JSON.stringify({ ...attempt, state: "unexpected" }));
   await assert.rejects(images.ensure({ preparation: "echo one" }), /invalid state/);
@@ -247,7 +277,9 @@ test("an interrupted capture with a known ready artifact publishes without rerun
   assert.equal(recovered.reference, first.reference);
   assert.equal(recovered.reused, true);
   assert.equal(calls.filter((call) => call === "seed").length, 1);
-  assert.equal((await records.ready(first.cacheKey))?.artifact.reference, first.reference);
+  const published = await records.ready(first.cacheKey);
+  assert.ok(published);
+  assert.equal(artifactReference(published.artifact), first.reference);
 }));
 
 test("a forbidden base verification keeps the build for recovery", async () => fixture(async ({ effects, records, calls }) => {
@@ -263,7 +295,7 @@ test("a forbidden base verification keeps the build for recovery", async () => f
   await assert.rejects(images.ensure({}),
     (cause) => cause instanceof OrbitalError && cause.code === "image_lookup_failed" && cause.evidence.statusCode === 403);
   const recovered = await images.ensure({});
-  assert.equal(recovered.reference, base.reference);
+  assert.equal(recovered.reference, baseReference);
   assert.equal(recovered.reused, true);
   assert.equal(calls.filter((call) => call === "build").length, 1);
 }));
@@ -274,7 +306,7 @@ test("a forbidden captured-image verification recovers without rerunning prepara
   const priorAvailable = effects.available;
   let forbidden = true;
   effects.available = async (artifact) => {
-    if (artifact.kind === "snapshot" && forbidden) {
+    if (artifact.name.startsWith("snapshot-") && forbidden) {
       forbidden = false;
       throw new OrbitalError("not_started", "image_lookup_failed", "Image lookup was forbidden.", { statusCode: 403 });
     }
@@ -313,27 +345,42 @@ test("ready receipts are atomic JSON records with the resolved base and attempt"
   const images = createImages(effects, records);
   const result = await images.ensure({ preparation: "echo one" });
   const record = await records.ready(result.cacheKey);
-  assert.equal(record?.artifact.reference, result.reference);
-  assert.equal(record?.base.buildId, "one");
-  assert.ok(record?.attemptId);
+  assert.ok(record);
+  assert.equal(artifactReference(record.artifact), result.reference);
+  assert.equal(record.base.buildId, "one");
+  assert.ok(record.attemptId);
   assert.equal((await records.attempt(result.cacheKey))?.cleanup, "deleted");
 }));
 
-test("image lookup treats only HTTP 404 as missing", async () => {
-  let responseStatus = 404;
+// An HTTP stub for the E2B template API. Each handler receives the decoded request path.
+async function withTemplateApi(handle: (path: string, response: import("node:http").ServerResponse) => void,
+  run: (ctx: { apiUrl: string; paths: string[]; directory: string }) => Promise<void>): Promise<void> {
   const paths: string[] = [];
   const server = createServer((request, response) => {
-    paths.push(request.url ?? "");
-    response.writeHead(responseStatus, { "content-type": "application/json" });
-    response.end(JSON.stringify({ code: responseStatus, message: "test status" }));
+    const path = decodeURIComponent(request.url ?? "");
+    paths.push(path);
+    response.setHeader("content-type", "application/json");
+    handle(path, response);
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  const directory = await mkdtemp(join(tmpdir(), "orbital-image-sdk-"));
+  const directory = await mkdtemp(join(tmpdir(), "orbital-image-api-"));
   try {
     const address = server.address();
     assert.ok(address && typeof address !== "string");
-    const images = createE2BImages({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}`,
-      cacheDirectory: directory, requestTimeoutMs: 2_000 });
+    await run({ apiUrl: `http://127.0.0.1:${address.port}`, paths, directory });
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+    server.closeAllConnections();
+    await new Promise<void>((done) => server.close(() => done()));
+  }
+}
+
+test("image lookup treats only HTTP 404 as missing", async () => {
+  let responseStatus = 404;
+  await withTemplateApi((_path, response) => {
+    response.writeHead(responseStatus).end(JSON.stringify({ code: responseStatus, message: "test status" }));
+  }, async ({ apiUrl, paths, directory }) => {
+    const images = createE2BImages({ apiKey: "test-only", apiUrl, cacheDirectory: directory, requestTimeoutMs: 2_000 });
     const exact = "custom:123e4567-e89b-12d3-a456-426614174000";
     for (const image of ["custom:default", exact]) {
       await assert.rejects(images.ensure({ image }),
@@ -344,85 +391,77 @@ test("image lookup treats only HTTP 404 as missing", async () => {
       await assert.rejects(images.ensure({ image }),
         (cause) => cause instanceof OrbitalError && cause.code === "image_lookup_failed");
     }
-    assert.ok(paths.some((path) => path.includes("/tags")));
-    assert.ok(paths.some((path) => path.includes("/templates/aliases/")));
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-    server.closeAllConnections();
-    await new Promise<void>((done) => server.close(() => done()));
-  }
+    assert.ok(paths.every((path) => path.startsWith("/templates/")));
+    assert.ok(paths.some((path) => path.startsWith("/templates/aliases/custom")));
+    assert.ok(paths.some((path) => path.startsWith("/templates/custom?")));
+    assert.equal(paths.some((path) => path.includes("/tags")), false);
+  });
 });
 
-test("snapshot overrides resolve exact builds through snapshot and tag APIs", async () => {
+test("an alias with a tag resolves through the alias, tags, and template build list", async () => {
   const buildId = "123e4567-e89b-12d3-a456-426614174000";
-  const snapshotId = "team/prepared:default";
-  const exact = `team/prepared:${buildId}`;
-  const paths: string[] = [];
-  const server = createServer((request, response) => {
-    paths.push(request.url ?? "");
-    response.writeHead(200, { "content-type": "application/json" });
-    if (request.url?.startsWith("/snapshots?")) {
-      response.end(JSON.stringify([{ snapshotID: snapshotId, names: ["team/prepared"] }]));
-    } else if (request.url?.includes("/tags")) {
+  await withTemplateApi((path, response) => {
+    if (path === "/templates/aliases/prepared") response.end(JSON.stringify({ templateID: "raw-id", public: false }));
+    else if (path === "/templates/prepared/tags") {
       response.end(JSON.stringify([{ tag: "default", buildID: buildId, createdAt: "2026-09-26T00:00:00Z" }]));
-    } else {
-      response.writeHead(500).end(JSON.stringify({ message: "Unexpected build status lookup" }));
-    }
+    } else if (path.startsWith("/templates/raw-id?")) {
+      response.end(JSON.stringify({ templateID: "raw-id", builds: [{ buildID: buildId, status: "ready" }] }));
+    } else response.writeHead(500).end(JSON.stringify({ message: `Unexpected ${path}` }));
+  }, async ({ apiUrl, paths, directory }) => {
+    const images = createE2BImages({ apiKey: "test-only", apiUrl, cacheDirectory: directory, requestTimeoutMs: 2_000 });
+    const tagged = await images.ensure({ image: "prepared:default" });
+    assert.equal(tagged.reference, `prepared:${buildId}`);
+    assert.equal(tagged.reused, true);
+    assert.deepEqual(paths.splice(0), ["/templates/aliases/prepared", "/templates/prepared/tags",
+      "/templates/raw-id?limit=100", "/templates/raw-id?limit=100"]);
+    const pinned = await images.ensure({ image: `prepared:${buildId}` });
+    assert.equal(pinned.reference, `prepared:${buildId}`);
+    assert.equal(paths.some((path) => path.includes("/tags")), false);
+    assert.equal(paths.some((path) => path.includes("/snapshots") || path.includes("/builds/")), false);
   });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  const directory = await mkdtemp(join(tmpdir(), "orbital-snapshot-sdk-"));
-  try {
-    const address = server.address();
-    assert.ok(address && typeof address !== "string");
-    const images = createE2BImages({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}`,
-      cacheDirectory: directory, requestTimeoutMs: 2_000 });
-    for (const image of [exact, snapshotId, "prepared:default", `prepared:${buildId}`]) {
+});
+
+test("a canonical snapshot name resolves through the alias API with the same request shape", async () => {
+  const buildId = "123e4567-e89b-12d3-a456-426614174000";
+  await withTemplateApi((path, response) => {
+    if (path === "/templates/aliases/team/prepared") response.end(JSON.stringify({ templateID: "raw-id", public: false }));
+    else if (path === "/templates/team/prepared/tags") {
+      response.end(JSON.stringify([{ tag: "default", buildID: buildId, createdAt: "2026-09-26T00:00:00Z" }]));
+    } else if (path.startsWith("/templates/raw-id?")) {
+      response.end(JSON.stringify({ templateID: "raw-id", builds: [{ buildID: buildId, status: "ready" }] }));
+    } else response.writeHead(500).end(JSON.stringify({ message: `Unexpected ${path}` }));
+  }, async ({ apiUrl, paths, directory }) => {
+    const images = createE2BImages({ apiKey: "test-only", apiUrl, cacheDirectory: directory, requestTimeoutMs: 2_000 });
+    for (const image of ["team/prepared", "team/prepared:default", `team/prepared:${buildId}`]) {
       const result = await images.ensure({ image });
-      assert.equal(result.reference, exact);
+      assert.equal(result.reference, `team/prepared:${buildId}`);
       assert.equal(result.reused, true);
     }
-    assert.equal(paths.filter((path) => path.includes("/builds/")).length, 0);
-    assert.ok(paths.some((path) => path.startsWith("/snapshots?")));
-    assert.ok(paths.some((path) => path.includes("/tags")));
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-    server.closeAllConnections();
-    await new Promise<void>((done) => server.close(() => done()));
-  }
+    assert.ok(paths.includes("/templates/aliases/team/prepared"));
+    assert.ok(paths.includes("/templates/team/prepared/tags"));
+    assert.ok(paths.every((path) => path.startsWith("/templates/")));
+    assert.equal(paths.some((path) => path.includes("/snapshots") || path.includes("/builds/")), false);
+  });
 });
 
-test("historical exact builds use the raw template build list", async () => {
+test("a raw template ID resolves only with a build ID tag", async () => {
   const buildId = "123e4567-e89b-12d3-a456-426614174000";
-  const paths: string[] = [];
   let denyMetadata = false;
-  const server = createServer((request, response) => {
-    const path = request.url ?? "";
-    paths.push(path);
-    response.setHeader("content-type", "application/json");
-    if (path.startsWith("/snapshots?")) response.end("[]");
-    else if (path.startsWith("/templates/legacy?")) response.writeHead(404).end("{}");
-    else if (path === "/templates/aliases/legacy") response.end(JSON.stringify({ templateID: "rawid", public: false }));
+  await withTemplateApi((path, response) => {
+    if (path.startsWith("/templates/aliases/")) response.writeHead(404).end("{}");
     else if (path.startsWith("/templates/rawid?")) {
       if (denyMetadata) response.writeHead(403).end("{}");
       else response.end(JSON.stringify({ templateID: "rawid", builds: [{ buildID: buildId, status: "ready" }] }));
     } else response.writeHead(400).end("{}");
-  });
-  await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  const directory = await mkdtemp(join(tmpdir(), "orbital-historical-build-"));
-  try {
-    const address = server.address();
-    assert.ok(address && typeof address !== "string");
-    const images = createE2BImages({ apiKey: "test-only", apiUrl: `http://127.0.0.1:${address.port}`,
-      cacheDirectory: directory, requestTimeoutMs: 2_000 });
-    const result = await images.ensure({ image: `legacy:${buildId}` });
-    assert.equal(result.reference, `legacy:${buildId}`);
-    assert.equal(paths.some((path) => path.includes("/builds/")), false);
+  }, async ({ apiUrl, paths, directory }) => {
+    const images = createE2BImages({ apiKey: "test-only", apiUrl, cacheDirectory: directory, requestTimeoutMs: 2_000 });
+    const result = await images.ensure({ image: `rawid:${buildId}` });
+    assert.equal(result.reference, `rawid:${buildId}`);
+    await assert.rejects(images.ensure({ image: "rawid:default" }),
+      (cause) => cause instanceof OrbitalError && cause.code === "image_missing");
+    assert.equal(paths.some((path) => path.includes("/tags") || path.includes("/builds/")), false);
     denyMetadata = true;
-    await assert.rejects(images.ensure({ image: `legacy:${buildId}` }),
+    await assert.rejects(images.ensure({ image: `rawid:${buildId}` }),
       (cause) => cause instanceof OrbitalError && cause.code === "image_lookup_failed" && cause.evidence.statusCode === 403);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-    server.closeAllConnections();
-    await new Promise<void>((done) => server.close(() => done()));
-  }
+  });
 });

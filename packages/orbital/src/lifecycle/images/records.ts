@@ -2,12 +2,20 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
+/**
+ * One pinned E2B build. `name` is the string E2B accepted at creation: the alias of an owned base,
+ * the canonical `<team>/<name>` of a captured snapshot, or the user's name for an external reference.
+ * `templateId` is the raw E2B template ID, resolved once.
+ */
 export interface ImageArtifact {
-  reference: string;
+  name: string;
   templateId: string;
   buildId: string;
-  kind: "template" | "snapshot";
-  snapshotId?: string;
+}
+
+// The allocation reference. It pins the build so a later lookup cannot drift behind a tag.
+export function artifactReference(artifact: ImageArtifact): string {
+  return `${artifact.name}:${artifact.buildId}`;
 }
 
 export interface ReadyImageRecord {
@@ -39,13 +47,17 @@ export interface ImageAttempt {
   updatedAt: string;
 }
 
+const ARTIFACT_KEYS = ["buildId", "name", "templateId"] as const;
+
+// Exactly the structured shape. Records from earlier contracts carried other keys and are rejected.
 function validArtifact(artifact: unknown): artifact is ImageArtifact {
-  if (!artifact || typeof artifact !== "object") return false;
-  const item = artifact as Partial<ImageArtifact>;
-  return typeof item.reference === "string" && item.reference.length > 0 &&
-    typeof item.templateId === "string" && item.templateId.length > 0 &&
-    typeof item.buildId === "string" && item.buildId.length > 0 &&
-    (item.kind === "template" || item.kind === "snapshot");
+  if (!artifact || typeof artifact !== "object" || Array.isArray(artifact)) return false;
+  const keys = Object.keys(artifact).sort();
+  if (keys.length !== ARTIFACT_KEYS.length || keys.some((key, index) => key !== ARTIFACT_KEYS[index])) return false;
+  return ARTIFACT_KEYS.every((key) => {
+    const value = (artifact as Record<string, unknown>)[key];
+    return typeof value === "string" && value.length > 0;
+  });
 }
 
 async function atomicJSON(path: string, value: unknown): Promise<void> {

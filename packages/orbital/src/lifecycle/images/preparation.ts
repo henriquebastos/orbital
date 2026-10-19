@@ -3,10 +3,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { OrbitalError, type Observer } from "../../operations.js";
 import type { Images, PrepareRequest, PreparedImage } from "./types.js";
 import { normalizeImageRequest } from "../creation.js";
-import { ImageRecords, type ImageArtifact, type ImageAttempt, type ReadyImageRecord } from "./records.js";
+import { artifactReference, ImageRecords, type ImageArtifact, type ImageAttempt, type ReadyImageRecord } from "./records.js";
 
-// Version 2 dropped the resource placeholders from the preparation key. Resources belong to the base.
-export const PREPARATION_CONTRACT_VERSION = 2;
+// Version 3 made artifacts structured and put the version into every record key, so records from
+// earlier contracts are unreachable rather than rejected after a read.
+export const PREPARATION_CONTRACT_VERSION = 3;
 
 export interface BaseRecipe {
   sourceHash: string;
@@ -49,6 +50,11 @@ export interface ImageEffects {
 
 function digest(parts: unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+}
+
+// The ImageRecords key of an owned base. Resources belong to the base, so they are part of its identity.
+export function baseRecordKey(scope: string, recipe: BaseRecipe): string {
+  return digest(["base", scope, recipe.sourceHash, recipe.cpuCount, recipe.memoryMB, PREPARATION_CONTRACT_VERSION]);
 }
 
 function cancelled(observer?: Observer): void {
@@ -143,7 +149,7 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
       return { artifact, reused: true };
     }
     const recipe = await effects.recipe();
-    const key = digest(["base", effects.scope, recipe.sourceHash, recipe.cpuCount, recipe.memoryMB]);
+    const key = baseRecordKey(effects.scope, recipe);
     const reuseBase = !request.refresh || request.preparation !== undefined;
     if (reuseBase) {
       const found = await findAvailableReadyRecord(key);
@@ -167,7 +173,7 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
       if (!reuse || existing.status !== "ready") await effects.waitForBuild(artifact, observer);
       await saveAttempt(attempt, "base_built", { artifact });
       if (!await effects.available(artifact)) {
-        throw new OrbitalError("failed", "base_unavailable", "The built base image is not ready.", { reference: artifact.reference });
+        throw new OrbitalError("failed", "base_unavailable", "The built base image is not ready.", { reference: artifactReference(artifact) });
       }
       const record: ReadyImageRecord = { version: 1, key, scope: effects.scope, attemptId: attempt.attemptId,
         base: artifact, artifact, sourceHash: recipe.sourceHash, contractVersion: PREPARATION_CONTRACT_VERSION,
@@ -201,24 +207,25 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
     cancelled(observer);
     const baseResult = await resolveBaseInQueue({ ...normalized, refresh }, observer);
     const resolvedBase = baseResult.artifact;
+    const baseReference = artifactReference(resolvedBase);
     const preparation = normalized.preparation;
     if (preparation === undefined) {
-      return { reference: resolvedBase.reference, baseReference: resolvedBase.reference,
+      return { reference: baseReference, baseReference,
         cacheKey: baseResult.key ?? digest(["external", effects.scope, resolvedBase.templateId, resolvedBase.buildId]),
         reused: baseResult.reused };
     }
     const scriptHash = createHash("sha256").update(preparation, "utf8").digest("hex");
     const key = digest(["preparation", effects.scope, resolvedBase.templateId, resolvedBase.buildId,
-      resolvedBase.reference, scriptHash, PREPARATION_CONTRACT_VERSION]);
+      scriptHash, PREPARATION_CONTRACT_VERSION]);
     if (!refresh) {
       const found = await findAvailableReadyRecord(key);
       if (found) {
         observer?.onProgress?.({ phase: "image_reused" });
-        return { reference: found.artifact.reference, baseReference: resolvedBase.reference, cacheKey: key, reused: true };
+        return { reference: artifactReference(found.artifact), baseReference, cacheKey: key, reused: true };
       }
     }
     const recovered = await recoverRecordedArtifact(key, undefined, scriptHash, observer);
-    if (recovered) return { reference: recovered.reference, baseReference: resolvedBase.reference, cacheKey: key, reused: true };
+    if (recovered) return { reference: artifactReference(recovered), baseReference, cacheKey: key, reused: true };
     unresolved(await records.attempt(key));
     cancelled(observer);
     const attempt: ImageAttempt = { version: 1, key, scope: effects.scope, attemptId: randomUUID(),
@@ -247,14 +254,14 @@ export function createImages(effects: ImageEffects, records: ImageRecords): Imag
       await saveAttempt(attempt, "captured", { artifact });
       if (!await effects.available(artifact)) {
         throw new OrbitalError("failed", "prepared_image_unavailable", "The captured image is not ready.",
-          { reference: artifact.reference });
+          { reference: artifactReference(artifact) });
       }
       const record: ReadyImageRecord = { version: 1, key, scope: effects.scope, attemptId: attempt.attemptId,
         base: resolvedBase, artifact, preparationHash: scriptHash,
         contractVersion: PREPARATION_CONTRACT_VERSION, createdAt: new Date().toISOString() };
       await records.writeReady(record);
       await saveAttempt(attempt, "ready", { state: "ready" });
-      result = { reference: artifact.reference, baseReference: resolvedBase.reference, cacheKey: key, reused: false };
+      result = { reference: artifactReference(artifact), baseReference, cacheKey: key, reused: false };
     } catch (cause) {
       failure = issue(cause, attempt.stage, attempt);
       await saveAttempt(attempt, attempt.stage, { state: failure.outcome === "uncertain" ||

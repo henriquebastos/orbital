@@ -16,7 +16,7 @@ import { createImages, type BaseRecipe, type ImageBuild, type ImageEffects, type
 import { OrbitalError, type Observer } from "../operations.js";
 import type { Images } from "../lifecycle/images/types.js";
 import { orbitalRecipe, runtimeCheckCommand } from "../e2b/recipe.js";
-import { ImageRecords, type ImageArtifact } from "../lifecycle/images/records.js";
+import { artifactReference, ImageRecords, type ImageArtifact } from "../lifecycle/images/records.js";
 import type { E2BProviderConfig } from "./provider.js";
 import type { ImageResources } from "../configuration/settings.js";
 import { createImageRegistry, imageError, sdkOptions } from "./image-registry.js";
@@ -69,9 +69,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
         throw imageError("uncertain", "base_build_unknown", "The E2B base build result is unknown.",
           { name, cause: cause instanceof Error ? cause.name : "unknown" });
       }
-      const artifact: ImageArtifact = { reference: `${name}:${result.buildId}`, templateId: result.templateId,
-        buildId: result.buildId, kind: "template" };
-      return artifact;
+      return { name, templateId: result.templateId, buildId: result.buildId };
     },
     async waitForBuild(artifact, observer): Promise<void> {
       const { templateId, buildId } = artifact;
@@ -101,7 +99,7 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
       await mkdir(logDirectory, { recursive: true, mode: 0o700 });
       let sandbox: Sandbox;
       try {
-        sandbox = await Sandbox.create(base.reference, {
+        sandbox = await Sandbox.create(artifactReference(base), {
           ...options, timeoutMs: SEED_LEASE_MS,
           metadata: { orbital_v2_preparation_attempt: attemptId },
           envs: {}, lifecycle: { onTimeout: "kill", autoResume: false },
@@ -206,8 +204,9 @@ export function createE2BImageEffects(config: E2BProviderConfig & { cacheDirecto
           await sandbox.commands.run(`rm -f -- ${scriptPath} ${receiptPath}`, { user: "user", timeoutMs: 30_000 })
             .catch(() => undefined);
           try {
+            // The snapshot ID is "<team>/<name>:default". The artifact keeps the canonical name without the tag.
             const snapshot = await Sandbox.createSnapshot(sandbox.sandboxId, { ...options, name });
-            return registry.resolve(snapshot.snapshotId);
+            return await registry.captured(snapshot.snapshotId);
           } catch (cause) {
             if (rejected(cause)) throw imageError("failed", "capture_rejected", "E2B rejected the image capture.",
               { seedId: sandbox.sandboxId, name, cause: (cause as Error).name });
