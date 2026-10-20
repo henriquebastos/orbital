@@ -141,7 +141,7 @@ Files named `start` and `resume` are reserved optional executables but are not i
 The project directory is packaged only for a new allocation. Allocation uses the refreshed project settings. Existing orbs are not updated, rebuilt, or initialized again.
 
 Pi preferences live beside the global settings file in `pi.json`.
-Settings commands edit global defaults only. Edit project files directly, then use `/orb settings refresh`. The settings report shows both project paths and the source of each effective value.
+Settings commands edit global defaults only. Edit project files directly, then use `/orb settings refresh`. The settings report shows the project directory and the source of each effective value.
 
 | Setting | Default | Environment override | Applies to |
 | --- | --- | --- | --- |
